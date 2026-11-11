@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>InvoAgent{% if workspace == 'demo' %} (Demo){% endif %}</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='logo.svg') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  {% block head %}{% endblock %}
+</head>
+<body>
+<div class="shell">
+  <aside class="sidebar">
+    <a class="brand" href="{{ url_for('index') }}"><img class="brand-logo" src="{{ url_for('static', filename='logo.svg') }}" alt="" width="28" height="28"> InvoAgent</a>
+
+    <div class="ws-switch" role="group" aria-label="Workspace">
+      {% for name, label in [('live', 'Live'), ('demo', 'Demo')] %}
+        <form method="post" action="{{ url_for('switch_workspace', name=name) }}">
+          <button type="submit" class="{{ name }} {% if workspace == name %}active{% endif %}"
+                  title="{{ 'Your company invoices' if name == 'live' else 'Sample invoices for showing the app' }}">{{ label }}</button>
+        </form>
+      {% endfor %}
+    </div>
+
+    <nav class="side-nav">
+      {% set tabs = [
+        ('index', 'Overview', none),
+        ('dashboard', 'Dashboard', none),
+        ('upload_page', 'Upload', none),
+        ('invoices', 'Invoices', nav_stats.total),
+        ('review_queue', 'Review queue', nav_stats.needs_review),
+        ('data_sheet', 'Data sheet', none),
+        ('vendors', 'Vendors', none),
+        ('camera', 'Phone camera', none),
+      ] %}
+      {% for key, label, count in tabs %}
+        {% if key == 'review_queue' %}
+          <a href="{{ url_for('invoices', review='1') }}"
+             class="{% if endpoint == 'invoices' and request.args.get('review') == '1' %}active{% endif %}">
+            {{ label }}{% if count %}<span class="count alert-count">{{ count }}</span>{% endif %}</a>
+        {% else %}
+          <a href="{{ url_for(key) }}"
+             class="{% if endpoint == key and not (key == 'invoices' and request.args.get('review') == '1') %}active{% endif %}">
+            {{ label }}{% if count %}<span class="count">{{ count }}</span>{% endif %}</a>
+        {% endif %}
+      {% endfor %}
+    </nav>
+
+    <div class="side-user">
+      <span>Signed in as <strong>{{ current_user }}</strong></span>
+      <form method="post" action="{{ url_for('logout') }}"><button type="submit">Log out</button></form>
+    </div>
+    <p class="side-foot">
+      {% if workspace == 'demo' %}<strong>Demo</strong>: sample invoices, safe to show others.
+      {% else %}<strong>Live</strong>: your company's invoices.{% endif %}
+    </p>
+  </aside>
+
+  <main class="content">
+    <div class="container">
+      {% if workspace == 'demo' %}
+        <div class="demo-banner">Demo workspace: sample invoices for showing the app. Switch to <strong>Live</strong> in the sidebar for real work.</div>
+      {% endif %}
+      {% with messages = get_flashed_messages() %}
+        {% if messages %}
+          <div class="alert">{% for m in messages %}<p>{{ m }}</p>{% endfor %}</div>
+        {% endif %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+</div>
+<script src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

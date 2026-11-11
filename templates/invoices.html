@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <div class="result-head">
+    <div>
+      <h1>{{ 'Review queue' if filters.review else 'Invoices' }}</h1>
+      {% if filters.review %}<p class="small">Invoices that need a person to check them (low confidence, failed checks, missing fields or a possible duplicate). Open one, correct it, then approve or reject.</p>{% endif %}
+      <p class="muted small">{{ total }} matching · {{ stats.total }} in database ·
+        {{ stats.needs_review }} need review · {{ stats.queued + stats.processing }} in queue</p>
+    </div>
+    <div class="actions">
+      <a class="btn secondary" href="{{ url_with('export_invoices_xlsx') }}">Export Excel</a>
+      <a class="btn secondary" href="{{ url_with('export_invoices_csv') }}">Invoices CSV</a>
+      <a class="btn secondary" href="{{ url_with('export_line_items_csv') }}">Line items CSV</a>
+    </div>
+  </div>
+
+  <form class="filters" method="get" action="{{ url_for('invoices') }}">
+    <input type="search" name="q" value="{{ filters.q or '' }}"
+           placeholder="Search invoice no, seller, buyer, GSTIN or file name">
+    <select name="status">
+      <option value="">All statuses</option>
+      {% for s in statuses %}<option value="{{ s }}" {% if filters.status == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select>
+    <select name="rstatus">
+      <option value="">Any review status</option>
+      {% for s in review_statuses %}<option value="{{ s }}" {% if filters.review_status == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
+    </select>
+    <label class="small"><input type="checkbox" name="review" value="1" {% if filters.review %}checked{% endif %}> Needs review only</label>
+    {% if filters.batch_id %}<input type="hidden" name="batch" value="{{ filters.batch_id }}">{% endif %}
+    <button class="btn" type="submit">Filter</button>
+    {% if filters.q or filters.status or filters.review or filters.batch_id or filters.review_status %}
+      <a class="small" href="{{ url_for('invoices') }}">Clear filters</a>
+    {% endif %}
+  </form>
+  {% if stats.failed %}
+    <form method="post" action="{{ url_for('reprocess_failed') }}" class="inline">
+      <button class="btn secondary" type="submit">Re-process {{ stats.failed }} failed</button>
+    </form>
+  {% endif %}
+</section>
+
+<section class="card">
+  <div class="result-head">
+    <p class="muted small">Click a row to open the invoice. Every invoice has the same columns; a grey
+      <span class="null">null</span> means the field was not found. Highlighted rows need a human check.</p>
+    <form id="bulk-delete" method="post" action="{{ url_for('delete_invoices') }}"
+          data-confirm="Delete the selected invoices and their files? This cannot be undone.">
+      <button class="btn danger" type="submit" id="bulk-delete-btn" disabled>Delete selected</button>
+    </form>
+  </div>
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th class="pick"><input type="checkbox" id="pick-all" title="Select all on this page" aria-label="Select all on this page"></th>
+        {% for c in columns %}<th>{{ c.replace('_', ' ') }}</th>{% endfor %}</tr></thead>
+      <tbody>
+        {% for r in rows %}
+          <tr class="{% if r.needs_review %}review{% endif %}" data-href="{{ url_for('invoice_detail', invoice_id=r.id) }}">
+            <td class="pick"><input type="checkbox" name="ids" value="{{ r.id }}" form="bulk-delete" aria-label="Select invoice {{ r.id }}"></td>
+            {% for c in columns %}
+              {% set v = r[c] %}
+              <td class="{% if c in money_columns %}num{% endif %}">
+                {%- if c == 'id' -%}<a href="{{ url_for('invoice_detail', invoice_id=v) }}">{{ v }}</a>
+                {%- elif v is none -%}<span class="null">null</span>
+                {%- elif c in money_columns -%}{{ "{:,.2f}".format(v) }}
+                {%- elif c == 'overall_confidence' -%}{{ (v * 100) | round | int }}%
+                {%- elif c == 'needs_review' -%}{{ 'yes' if v else 'no' }}
+                {%- elif c == 'status' or c == 'review_status' -%}<span class="status {{ v }}">{{ v }}</span>
+                {%- elif c == 'duplicate_of' -%}<a class="dup-link" href="{{ url_for('invoice_detail', invoice_id=v) }}">#{{ v }}</a>
+                {%- else -%}{{ v }}{%- endif -%}
+              </td>
+            {% endfor %}
+          </tr>
+        {% else %}
+          <tr><td colspan="{{ columns | length + 1 }}" class="muted">No invoices yet. Upload some on the Upload page.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if pages > 1 %}
+    <div class="pager">
+      {% if page > 1 %}<a href="{{ url_with('invoices', page=page - 1) }}">&larr; Previous</a>{% endif %}
+      <span class="muted small">Page {{ page }} of {{ pages }}</span>
+      {% if page < pages %}<a href="{{ url_with('invoices', page=page + 1) }}">Next &rarr;</a>{% endif %}
+    </div>
+  {% endif %}
+</section>
+{% endblock %}

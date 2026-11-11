@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>Vendors</h1>
+  <p class="muted small">Every seller found on the invoices, grouped by GSTIN (or by name when there is no GSTIN).
+    Click a vendor to see its invoices.</p>
+</section>
+<section class="card sheet-card">
+  {% if not vendors %}
+    <p class="muted" style="padding: 16px">No vendors yet.</p>
+  {% else %}
+  <div class="sheet-wrap">
+    <table class="sheet">
+      <thead><tr><th>Vendor</th><th>GSTIN / tax ID</th><th>Currency</th><th>Invoices</th><th>Total</th><th>Tax</th>
+        <th>Last invoice</th><th>Need review</th><th>Possible duplicates</th></tr></thead>
+      <tbody>
+        {% for v in vendors %}
+          <tr data-href="{{ url_for('invoices', q=v.gstin or v.name) }}">
+            <td><a href="{{ url_for('invoices', q=v.gstin or v.name) }}">{{ v.name }}</a></td>
+            <td>{% if v.gstin %}{{ v.gstin }}{% else %}<span class="null">null</span>{% endif %}</td>
+            <td>{{ v.currency or '' }}</td>
+            <td class="num">{{ v.invoices }}</td>
+            <td class="num">{{ "{:,.2f}".format(v.total or 0) }}</td>
+            <td class="num">{{ "{:,.2f}".format(v.tax or 0) }}</td>
+            <td>{{ v.last_invoice or '' }}</td>
+            <td class="num">{{ v.needs_review }}</td>
+            <td class="num">{{ v.duplicates }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% endif %}
+</section>
+{% endblock %}

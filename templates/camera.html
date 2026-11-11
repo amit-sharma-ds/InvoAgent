@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>Capture an invoice</h1>
+  <p class="muted">Place the paper on a flat, well-lit surface and keep all four edges in the frame.</p>
+</section>
+
+<section class="grid-3">
+  <div class="card">
+    <h2>1. Phone browser photo</h2>
+    <p class="muted small">Open this page on the phone and take a photo. Full camera resolution, so this gives the
+      <strong>best accuracy</strong>. No app needed.</p>
+    <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data" class="stack">
+      <input type="hidden" name="source" value="camera">
+      <input type="file" name="files" accept="image/*" capture="environment" required>
+      <button class="btn" type="submit">Take photo and extract</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>2. Phone camera over Wi-Fi</h2>
+    <p class="muted small">Open <strong>DroidCam</strong> (port 4747) or <strong>IP Webcam</strong> (port 8080, press
+      <em>Start server</em>) on the phone. Its screen shows the Wi-Fi IP. Enter it once; it is remembered.
+      Phone and PC must be on the same network. If the <strong>DroidCam PC client</strong> is running, Connect
+      uses its picture automatically (no "busy", no green lines).</p>
+    <form id="phone-form" class="stack" data-connected="{{ '1' if phone_status.connected else '0' }}">
+      <div class="inline-fields">
+        <label class="small">Phone IP <input name="host" id="phone-host" value="{{ phone_host }}"
+               placeholder="192.168.1.5" required></label>
+        <label class="small">Port <input name="port" id="phone-port" type="number" value="{{ phone_port }}"
+               min="1" max="65535"></label>
+      </div>
+      <div class="actions">
+        <button class="btn" type="submit" id="phone-connect">Connect</button>
+        <button class="btn secondary" type="button" id="phone-find">Find phones</button>
+      </div>
+    </form>
+    <p class="small muted" id="phone-msg">{% if phone_status.connected %}Connected to {{ phone_status.host }}:{{ phone_status.port }}{% endif %}</p>
+    <ul class="plain small" id="phone-found"></ul>
+    <div class="preview" id="phone-preview-box" hidden>
+      <img id="phone-preview" alt="Live picture from the phone">
+      <div class="actions">
+        <button class="btn" type="button" id="phone-enlarge">Open large view</button>
+        <form method="post" action="{{ url_for('phone_capture') }}" class="inline">
+          <button class="btn secondary" type="submit">Capture and extract</button>
+        </form>
+        <button class="btn secondary" type="button" id="phone-disconnect">Disconnect</button>
+      </div>
+      <p class="muted small">Hold the phone still. The app focuses and keeps the sharpest frame. Video is
+        often lower resolution than a photo (for example 640×480), so let the invoice fill the picture.</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>3. DroidCam PC client / webcam</h2>
+    <p class="muted small">Best way to use DroidCam on Windows: open the <strong>DroidCam client</strong> on this
+      PC, connect it to the phone (you see the video there), then press Connect. The client gets the normal
+      picture and gives it to this app as the "DroidCam Video" camera. Any webcam works here too.</p>
+    <div class="inline-fields">
+      <label class="small">Camera
+        <select id="pc-index">
+          <option value="">Auto</option>
+          {% for i in range(6) %}<option value="{{ i }}">{{ i }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+    <div class="actions">
+      <button class="btn" type="button" id="pc-connect">Connect PC camera</button>
+    </div>
+    <p class="small muted" id="pc-msg"></p>
+  </div>
+</section>
+
+<div class="camera-overlay" id="camera-overlay" hidden>
+  <img id="phone-big" alt="Live picture from the phone">
+  <p class="camera-note" id="camera-note"></p>
+  <div class="camera-bar">
+    <form method="post" action="{{ url_for('phone_capture') }}" class="inline">
+      <button class="btn" type="submit">Capture and extract</button>
+    </form>
+    <button class="btn secondary" type="button" id="camera-fullscreen">Full screen</button>
+    <button class="btn secondary" type="button" id="camera-close">Small view (Esc)</button>
+    <button class="btn secondary" type="button" id="camera-disconnect">Disconnect</button>
+  </div>
+</div>
+{% endblock %}

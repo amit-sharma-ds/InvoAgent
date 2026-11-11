@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>Overview</h1>
+  <p class="muted small">{{ 'Live workspace: your company invoices.' if workspace == 'live' else 'Demo workspace: sample invoices.' }}</p>
+  {% if overview.total == 0 %}
+    <div class="empty">
+      <p><strong>No invoices here yet.</strong> Upload one or two invoices (PDF or photo) to see the result.</p>
+      <a class="btn" href="{{ url_for('upload_page') }}">Upload invoices</a>
+      <a class="btn secondary" href="{{ url_for('camera') }}">Use the phone camera</a>
+    </div>
+  {% endif %}
+</section>
+
+{% if overview.total %}
+<section class="stat-grid">
+  <a class="stat" href="{{ url_for('invoices') }}"><span class="stat-num">{{ overview.total }}</span><span>invoices</span></a>
+  <a class="stat warn" href="{{ url_for('invoices', review='1') }}"><span class="stat-num">{{ overview.needs_review }}</span><span>need review</span></a>
+  <a class="stat good" href="{{ url_for('invoices', rstatus='approved') }}"><span class="stat-num">{{ overview.review.get('approved', 0) }}</span><span>approved</span></a>
+  <a class="stat" href="{{ url_for('invoices', rstatus='rejected') }}"><span class="stat-num">{{ overview.review.get('rejected', 0) }}</span><span>rejected</span></a>
+  <a class="stat warn" href="{{ url_for('invoices', review='1') }}"><span class="stat-num">{{ overview.duplicates }}</span><span>possible duplicates</span></a>
+  <a class="stat" href="{{ url_for('invoices', status='failed') }}"><span class="stat-num">{{ overview.failed }}</span><span>failed</span></a>
+</section>
+
+<section class="grid-2">
+  <div class="card">
+    <h2>Amounts by currency</h2>
+    <p class="muted small">Processed invoices. Rejected invoices and duplicate copies are not counted.</p>
+    <div class="table-wrap"><table class="kv">
+      <thead><tr><th>Currency</th><th class="num">Invoices</th><th class="num">Total</th><th class="num">Tax</th><th class="num">This month</th></tr></thead>
+      <tbody>
+        {% for t in overview.totals %}
+          <tr><td>{{ t.currency }}</td><td class="num">{{ t.invoices }}</td>
+            <td class="num">{{ "{:,.2f}".format(t.total or 0) }}</td><td class="num">{{ "{:,.2f}".format(t.tax or 0) }}</td>
+            <td class="num">{{ "{:,.2f}".format(t.month_total or 0) }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+  </div>
+  <div class="card">
+    <h2>Recent invoices</h2>
+    <div class="table-wrap"><table class="kv">
+      <tbody>
+        {% for r in overview.recent %}
+          <tr data-href="{{ url_for('invoice_detail', invoice_id=r.id) }}">
+            <td><a href="{{ url_for('invoice_detail', invoice_id=r.id) }}">#{{ r.id }}</a></td>
+            <td>{{ r.seller_name or r.file_name }}<br><span class="muted small">{{ r.invoice_number or 'no number' }} · {{ r.invoice_date or 'no date' }}</span></td>
+            <td class="num">{% if r.total is not none %}{{ r.currency or '' }} {{ "{:,.2f}".format(r.total) }}{% endif %}</td>
+            <td>{% if r.status != 'done' %}<span class="status {{ r.status }}">{{ r.status }}</span>
+                {% elif r.duplicate_of %}<span class="status failed">duplicate?</span>
+                {% elif r.needs_review %}<span class="status queued">review</span>
+                {% else %}<span class="status {{ r.review_status or 'pending' }}">{{ r.review_status or 'pending' }}</span>{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+  </div>
+</section>
+{% endif %}
+
+<section class="card">
+  <h2>How invoices flow through this app</h2>
+  <ol class="steps">
+    <li><strong>Capture</strong>: upload PDFs / photos / ZIPs, import a folder, or use the phone camera.</li>
+    <li><strong>Extract</strong>: number, dates, seller, buyer, GSTINs, line items, tax and totals are read automatically.</li>
+    <li><strong>Check</strong>: totals must add up, GSTINs must be valid, CGST must equal SGST, the same invoice must not come twice.</li>
+    <li><strong>Review</strong>: anything doubtful lands in the <a href="{{ url_for('invoices', review='1') }}">Review queue</a>. Correct values, then approve or reject.</li>
+    <li><strong>Export</strong>: the <a href="{{ url_for('data_sheet') }}">Data sheet</a> gives all data as Excel / CSV for accounting.</li>
+  </ol>
+</section>
+{% endblock %}

@@ -1,0 +1,26 @@
+# Web app
+flask>=3.0,<4
+waitress>=3.0           # production WSGI server (works on Windows)
+openpyxl>=3.1           # Excel export
+
+# Document / image handling
+pymupdf>=1.24          # PDF text + page rendering (no external binary needed)
+pillow>=10.0
+numpy>=1.26
+opencv-python-headless>=4.9   # preprocessing, document-edge detection, camera frames
+
+# OCR (needs the Tesseract program installed, see README)
+pytesseract>=0.3.10
+
+# Field matching / normalisation
+rapidfuzz>=3.6          # fuzzy string matching for label synonyms
+sentence-transformers>=3.0  # embeddings for semantic label matching (seller == vendor)
+python-dateutil>=2.9
+
+# Phone / IP camera access
+requests>=2.31
+
+# Dev / testing
+pytest>=8.0
+reportlab>=4.0          # used only by scripts/make_sample_invoices.py to create test invoices
+pyarrow>=15             # used only by scripts/convert_katanaml.py to read the public dataset

@@ -1,0 +1,23 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# runtime data: database, stored originals, label cache, reports, generated samples
+data/invoices.db*
+data/files/
+data/label_cache.json
+data/settings.json
+data/*.xlsx
+data/*report.json
+data/samples/
+data/uploads/
+data/*.txt
+# downloaded third-party datasets (re-download with the commands in the README)
+datasets/
+# workspaces (company invoices!), sign-in users (password hashes) and the session secret: never commit
+data/live/
+data/demo/
+data/users.json
+data/secret_key
+# local editor / assistant settings (paths on this PC)
+.claude/

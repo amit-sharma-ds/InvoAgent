@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sign in · InvoAgent</title>
+  <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='logo.svg') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="login-page">
+<main class="login-box">
+  <img class="login-logo" src="{{ url_for('static', filename='logo.svg') }}" alt="" width="56" height="56">
+  <h1>InvoAgent</h1>
+  <p class="muted small">Invoice data from PDFs, scans and phone photos. Sign in to continue.</p>
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}<div class="alert">{% for m in messages %}<p>{{ m }}</p>{% endfor %}</div>{% endif %}
+  {% endwith %}
+  {% if error %}<p class="login-error" role="alert">{{ error }}</p>{% endif %}
+  {% if not users_exist %}
+    <p class="login-error">No user is set up yet. On the PC that runs the app, open the project folder and run:<br>
+      <code>python scripts/set_password.py admin</code><br>
+      On a server (Render, Docker) set <code>INVOICE_ADMIN_USER</code> and <code>INVOICE_ADMIN_PASSWORD</code> and restart.</p>
+  {% endif %}
+  <form method="post" action="{{ url_for('login') }}" class="stack">
+    <input type="hidden" name="next" value="{{ next }}">
+    <label>User name
+      <input name="username" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus>
+    </label>
+    <label>Password
+      <input name="password" type="password" autocomplete="current-password" required>
+    </label>
+    <button class="btn" type="submit">Sign in</button>
+  </form>
+</main>
+</body>
+</html>

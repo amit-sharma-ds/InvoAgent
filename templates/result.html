@@ -1,0 +1,185 @@
+{% extends "base.html" %}
+
+{% macro badge(conf) -%}
+<span class="badge {% if conf >= 0.8 %}good{% elif conf >= 0.5 %}mid{% else %}low{% endif %}">{{ (conf * 100) | round | int }}%</span>
+{%- endmacro %}
+
+{% macro money(v) -%}
+{%- if v is number %}{{ "{:,.2f}".format(v) }}{% else %}{{ v }}{% endif -%}
+{%- endmacro %}
+
+{% macro row(label, f, amount=False) -%}
+<tr>
+  <th>{{ label }}</th>
+  {% if f and f.value is not none %}
+    <td>{% if amount %}{{ money(f.value) }}{% else %}{{ f.value }}{% endif %}</td>
+    <td>{{ badge(f.confidence) }}</td>
+    <td class="muted small">{{ f.source_label }}{% if f.page %} · page {{ f.page }}{% endif %}</td>
+  {% else %}
+    <td class="missing" colspan="3">not found</td>
+  {% endif %}
+</tr>
+{%- endmacro %}
+
+{% macro party(title, p) -%}
+<div class="card party">
+  <h3>{{ title }}</h3>
+  {% if p %}
+    <p class="name">{{ p.value.name }}</p>
+    {% if p.value.address %}<p class="addr">{{ p.value.address }}</p>{% endif %}
+    <dl>
+      {% if p.value.tax_id %}<dt>Tax ID</dt><dd>{{ p.value.tax_id }}</dd>{% endif %}
+      {% if p.value.email %}<dt>Email</dt><dd>{{ p.value.email }}</dd>{% endif %}
+      {% if p.value.phone %}<dt>Phone</dt><dd>{{ p.value.phone }}</dd>{% endif %}
+    </dl>
+    <p class="muted small">Matched label: "{{ p.source_label }}" · confidence {{ badge(p.confidence) }}</p>
+  {% else %}
+    <p class="missing">not found</p>
+  {% endif %}
+</div>
+{%- endmacro %}
+
+{% block content %}
+{% if invoice %}<a class="back-link" href="{{ back_url }}">&larr; Back</a>{% endif %}
+<section class="card">
+  <div class="result-head">
+    <div>
+      <h1>{{ result.source_file }}</h1>
+      <p class="muted small">{{ result.pages }} page(s) · {{ result.extraction.method }} text ·
+        label matching: {{ result.extraction.label_matcher }}</p>
+    </div>
+    <div class="overall">Overall confidence {{ badge(result.overall_confidence) }}</div>
+  </div>
+
+  {% if result.warnings %}
+    <ul class="warnings">{% for w in result.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  {% if invoice %}
+    <p class="small">Saved as invoice #{{ invoice.id }} ·
+      {% if invoice.needs_review %}<span class="badge low">needs review</span>{% else %}<span class="badge good">checks passed</span>{% endif %}
+      · processed in {{ invoice.processing_ms }} ms</p>
+  {% endif %}
+
+  <div class="actions">
+    <button class="btn secondary" id="download-json" type="button">Download JSON</button>
+    {% if invoice %}
+      <a class="btn secondary" href="{{ url_for('invoice_file', invoice_id=invoice.id) }}" target="_blank">Original file</a>
+      <form method="post" action="{{ url_for('reprocess', invoice_id=invoice.id) }}" class="inline">
+        <button class="btn secondary" type="submit">Re-process</button>
+      </form>
+      <a class="btn secondary" href="{{ url_for('invoices') }}">All invoices</a>
+      <form method="post" action="{{ url_for('delete_invoice', invoice_id=invoice.id) }}" class="inline"
+            data-confirm="Delete invoice #{{ invoice.id }} ({{ invoice.file_name }}) and its file? This cannot be undone.">
+        <button class="btn danger" type="submit">Delete</button>
+      </form>
+    {% endif %}
+    <a class="btn secondary" href="{{ url_for('upload_page') }}">Upload more</a>
+  </div>
+  <script type="application/json" id="result-json">{{ result_json|safe }}</script>
+</section>
+
+{% if invoice %}
+<section class="card review-card {{ invoice.review_status or 'pending' }}">
+  <div class="result-head">
+    <div>
+      <h2>Review</h2>
+      <p class="small">Status: <span class="status {{ invoice.review_status or 'pending' }}">{{ invoice.review_status or 'pending' }}</span>
+        {% if invoice.reviewed_at %} · {{ invoice.reviewed_at }}{% endif %}
+        {% if invoice.edited %} · <span class="badge mid">corrected by reviewer</span>{% endif %}
+        {% if invoice.duplicate_of %} · <a class="dup-link" href="{{ url_for('invoice_detail', invoice_id=invoice.duplicate_of) }}">possible duplicate of #{{ invoice.duplicate_of }}</a>{% endif %}</p>
+      {% if invoice.review_note %}<p class="muted small">Note: {{ invoice.review_note }}</p>{% endif %}
+    </div>
+  </div>
+  <form method="post" action="{{ url_for('review', invoice_id=invoice.id) }}" class="review-form">
+    <input type="text" name="note" placeholder="Note (optional), e.g. why it was rejected">
+    <button class="btn" type="submit" name="decision" value="approved">Approve</button>
+    <button class="btn danger" type="submit" name="decision" value="rejected">Reject</button>
+    <label class="small"><input type="checkbox" name="next" value="1" checked> then open the next invoice to review</label>
+  </form>
+</section>
+
+<details class="card" {% if invoice.needs_review and not invoice.edited %}open{% endif %}>
+  <summary>Correct the extracted values</summary>
+  <p class="muted small">Fix anything that was read wrongly, then save. Corrections go to the database, the Data sheet and the exports.</p>
+  <form method="post" action="{{ url_for('edit_invoice', invoice_id=invoice.id) }}" class="edit-grid">
+    {% for col, label in edit_labels %}
+      <label>{{ label }}
+        <input name="{{ col }}" value="{{ '' if invoice[col] is none else invoice[col] }}"
+               {% if col in ('invoice_date', 'due_date') %}placeholder="YYYY-MM-DD"{% endif %}>
+      </label>
+    {% endfor %}
+    <div class="edit-actions"><button class="btn" type="submit">Save corrections</button></div>
+  </form>
+</details>
+{% endif %}
+
+<section class="grid-2">
+  <div class="card">
+    <h2>Invoice details</h2>
+    <table class="kv">
+      {{ row("Invoice number", result.fields.invoice_number) }}
+      {{ row("Invoice date", result.fields.invoice_date) }}
+      {{ row("Due date", result.fields.due_date) }}
+      {{ row("PO number", result.fields.po_number) }}
+      {{ row("Currency", result.fields.currency) }}
+    </table>
+  </div>
+  <div class="card">
+    <h2>Amounts</h2>
+    <table class="kv">
+      {{ row("Subtotal", result.fields.subtotal, true) }}
+      {{ row("Tax", result.fields.tax, true) }}
+      {{ row("Discount", result.fields.discount, true) }}
+      {{ row("Shipping / freight", result.fields.shipping, true) }}
+      {{ row("Total", result.fields.total, true) }}
+    </table>
+  </div>
+</section>
+
+<section class="grid-2">
+  {{ party("Seller / Vendor", result.fields.seller) }}
+  {{ party("Buyer / Customer", result.fields.buyer) }}
+</section>
+
+<section class="card">
+  <h2>Line items</h2>
+  {% if result.line_items %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Description</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead>
+        <tbody>
+          {% for it in result.line_items %}
+          <tr>
+            <td>{{ it.description }}</td>
+            <td>{{ it.quantity if it.quantity is not none else "" }}</td>
+            <td>{{ money(it.unit_price) if it.unit_price is not none else "" }}</td>
+            <td>{{ money(it.amount) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p class="muted">No line-item table was detected.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>Cross-checks</h2>
+  {% if result.checks %}
+    <ul class="checks">
+      {% for k, v in result.checks.items() %}
+        <li class="{{ 'ok' if v else 'fail' }}">{{ 'OK' if v else 'Mismatch' }} · {{ k.replace('_', ' ') }}</li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="muted">Not enough values to cross-check.</p>
+  {% endif %}
+</section>
+
+<details class="card">
+  <summary>Raw text the parser read</summary>
+  <pre>{{ result.raw_text }}</pre>
+</details>
+{% endblock %}

@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block head %}{% if invoice.status in ('queued', 'processing') %}<meta http-equiv="refresh" content="1">{% endif %}{% endblock %}
+{% block content %}
+<a class="back-link" href="{{ back_url }}">&larr; Back</a>
+<section class="card">
+  <h1>{{ invoice.file_name }}</h1>
+  <p class="muted small">Invoice #{{ invoice.id }} in the database</p>
+  {% if invoice.status == 'failed' %}
+    <p class="missing">Processing failed: {{ invoice.error }}</p>
+    <form method="post" action="{{ url_for('reprocess', invoice_id=invoice.id) }}" class="inline">
+      <button class="btn" type="submit">Try again</button>
+    </form>
+  {% else %}
+    <p>Status: <span class="status {{ invoice.status }}">{{ invoice.status }}</span>. This page refreshes automatically.</p>
+  {% endif %}
+  <p><a href="{{ url_for('invoice_file', invoice_id=invoice.id) }}" target="_blank">Open the original file</a></p>
+  {% if invoice.status not in ('queued', 'processing') %}
+  <form method="post" action="{{ url_for('delete_invoice', invoice_id=invoice.id) }}" class="inline"
+        data-confirm="Delete invoice #{{ invoice.id }} ({{ invoice.file_name }}) and its file? This cannot be undone.">
+    <button class="btn danger" type="submit">Delete</button>
+  </form>
+  {% endif %}
+</section>
+{% endblock %}

@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{% set MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'] %}
+{% macro label(key) -%}
+  {%- if key | length == 7 -%}{{ MONTHS[key[5:7] | int - 1] }} {{ key[2:4] }}{%- else -%}{{ key }}{%- endif -%}
+{%- endmacro %}
+{% macro long_label(key) -%}
+  {%- if key | length == 7 -%}{{ MONTHS[key[5:7] | int - 1] }} {{ key[0:4] }}{%- else -%}{{ key }}{%- endif -%}
+{%- endmacro %}
+{% block content %}
+<section class="card">
+  <div class="result-head">
+    <div>
+      <h1>Dashboard</h1>
+      <p class="muted small">Spend by invoice date. Rejected invoices and duplicate copies are not counted.
+        Amounts in different currencies are never added together: pick one currency.</p>
+    </div>
+    {% if d.currencies %}
+    <form class="filters dash-filters" method="get" action="{{ url_for('dashboard') }}">
+      <label class="small">Currency
+        <select name="currency" data-autosubmit>
+          {% for c in d.currencies %}<option value="{{ c.currency }}" {% if c.currency == d.currency %}selected{% endif %}>{{ c.currency }} ({{ c.n }})</option>{% endfor %}
+        </select>
+      </label>
+      <label class="small">Period
+        <select name="period" data-autosubmit>
+          {% for key, text in periods %}<option value="{{ key }}" {% if key == d.period %}selected{% endif %}>{{ text }}</option>{% endfor %}
+        </select>
+      </label>
+      <noscript><button class="btn" type="submit">Show</button></noscript>
+    </form>
+    {% endif %}
+  </div>
+</section>
+
+{% if not d.currencies %}
+<section class="card empty">
+  <p><strong>No processed invoices yet.</strong> The dashboard fills in as invoices are uploaded.</p>
+  <a class="btn" href="{{ url_for('upload_page') }}">Upload invoices</a>
+</section>
+{% else %}
+{% set cur = d.currency %}
+<section class="stat-grid">
+  <div class="stat"><span class="stat-num">{{ d.summary.total | amount(cur) or '0.00' }}</span><span>total value ({{ cur }})</span></div>
+  <div class="stat"><span class="stat-num">{{ d.summary.tax | amount(cur) or '0.00' }}</span><span>tax / GST ({{ cur }})</span></div>
+  <div class="stat"><span class="stat-num">{{ d.summary.invoices }}</span><span>invoices</span></div>
+  <div class="stat"><span class="stat-num">{{ d.summary.vendors }}</span><span>vendors</span></div>
+</section>
+
+<section class="card viz">
+  <h2>Invoice value by {{ 'year' if d.by_year else 'month' }}</h2>
+  <ul class="viz-legend">
+    <li><span class="swatch taxable"></span>Taxable value</li>
+    <li><span class="swatch tax"></span>Tax (GST / VAT)</li>
+  </ul>
+  {% if d.summary.invoices == 0 %}
+    <p class="muted">No {{ cur }} invoices dated in this period. Try another period.</p>
+  {% else %}
+  <div class="vchart" role="img" aria-label="Invoice value by {{ 'year' if d.by_year else 'month' }} in {{ cur }}; the table below has the numbers.">
+    <div class="vchart-axis">
+      <span>{{ d.axis_max | amount(cur) }}</span><span>{{ (d.axis_max / 2) | amount(cur) }}</span><span>0</span>
+    </div>
+    <div class="vchart-plot">
+      <div class="vchart-grid"><i></i><i></i><i></i></div>
+      {% for b in d.buckets %}
+        <div class="vbar" tabindex="0"
+             data-tip="{{ long_label(b.key) }}&#10;Taxable {{ b.taxable | amount(cur) }}&#10;Tax {{ b.tax | amount(cur) }}&#10;Total {{ b.total | amount(cur) }} {{ cur }}&#10;{{ b.invoices }} invoice{{ 's' if b.invoices != 1 }}">
+          <div class="vbar-stack" style="height: {{ (100 * b.total / d.axis_max) | round(2) }}%">
+            {% if b.tax > 0 %}<div class="seg tax" style="flex-grow: {{ b.tax }}"></div>{% endif %}
+            {% if b.taxable > 0 %}<div class="seg taxable" style="flex-grow: {{ b.taxable }}"></div>{% endif %}
+          </div>
+          <span class="vbar-label">{{ label(b.key) }}</span>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% if d.undated %}<p class="muted small">{{ d.undated }} {{ cur }} invoice{{ 's' if d.undated != 1 }} without a date
+    {{ 'are' if d.undated != 1 else 'is' }} not in this chart (see the <a href="{{ url_for('invoices', review='1') }}">Review queue</a>).</p>{% endif %}
+  <details>
+    <summary>Show as a table</summary>
+    <div class="table-wrap"><table class="kv">
+      <thead><tr><th>{{ 'Year' if d.by_year else 'Month' }}</th><th class="num">Invoices</th><th class="num">Taxable</th><th class="num">Tax</th><th class="num">Total</th></tr></thead>
+      <tbody>
+        {% for b in d.buckets %}<tr><td>{{ long_label(b.key) }}</td><td class="num">{{ b.invoices }}</td>
+          <td class="num">{{ b.taxable | amount(cur) }}</td><td class="num">{{ b.tax | amount(cur) }}</td><td class="num">{{ b.total | amount(cur) }}</td></tr>{% endfor %}
+      </tbody>
+    </table></div>
+  </details>
+  {% endif %}
+</section>
+
+<section class="card viz">
+  <h2>Top vendors ({{ cur }})</h2>
+  {% if d.vendors %}
+  <ul class="hbars">
+    {% for v in d.vendors %}
+      <li data-href="{{ url_for('invoices', q=v.gstin or v.name) }}" tabindex="0"
+          title="{{ v.name }}: {{ v.total | amount(cur) }} {{ cur }} in {{ v.invoices }} invoice{{ 's' if v.invoices != 1 }}">
+        <span class="hbar-name">{{ v.name }}{% if v.gstin %} <span class="muted small">{{ v.gstin }}</span>{% endif %}</span>
+        <span class="hbar-track"><span class="hbar" style="width: {{ (100 * (v.total or 0) / d.vendor_max) | round(2) }}%"></span></span>
+        <span class="hbar-value">{{ v.total | amount(cur) }}<span class="muted small"> · {{ v.invoices }}</span></span>
+      </li>
+    {% endfor %}
+  </ul>
+  {% else %}
+    <p class="muted">No vendors in this period.</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}

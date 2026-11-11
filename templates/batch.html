@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block head %}{% if not batch.complete %}<meta http-equiv="refresh" content="3">{% endif %}{% endblock %}
+{% block content %}
+<a class="back-link" href="{{ url_for('upload_page') }}">&larr; Back to Upload</a>
+<section class="card">
+  <h1>{{ batch.name }}</h1>
+  <p class="muted small">Batch #{{ batch.id }} · created {{ batch.created_at }}</p>
+  {% set pct = (100 * batch.finished / batch.total) if batch.total else 0 %}
+  <div class="progress"><div class="bar" style="width: {{ pct | round(1) }}%"></div></div>
+  <p class="stat-row">
+    <span><strong>{{ batch.finished }}</strong> / {{ batch.total }} processed</span>
+    <span>{{ batch.queued }} queued</span>
+    <span>{{ batch.processing }} processing</span>
+    <span>{{ batch.failed }} failed</span>
+    <span>{{ batch.needs_review }} need review</span>
+  </p>
+  {% if batch.complete %}
+    <div class="actions">
+      <a class="btn" href="{{ url_for('export_invoices_xlsx', batch=batch.id) }}">Export this batch (Excel)</a>
+      <a class="btn secondary" href="{{ url_for('invoices', batch=batch.id) }}">Open in invoice table</a>
+    </div>
+  {% else %}
+    <p class="muted small">This page refreshes every 3 seconds. You can close it: processing continues in the background.</p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <div class="table-wrap">
+    <table class="data">
+      <thead><tr><th>id</th><th>file</th><th>status</th><th>invoice number</th><th>seller</th>
+        <th>total</th><th>needs review</th></tr></thead>
+      <tbody>
+        {% for r in rows %}
+          <tr class="{% if r.needs_review %}review{% endif %}" data-href="{{ url_for('invoice_detail', invoice_id=r.id) }}">
+            <td><a href="{{ url_for('invoice_detail', invoice_id=r.id) }}">{{ r.id }}</a></td>
+            <td>{{ r.file_name }}</td>
+            <td><span class="status {{ r.status }}">{{ r.status }}</span></td>
+            <td>{% if r.invoice_number is none %}<span class="null">null</span>{% else %}{{ r.invoice_number }}{% endif %}</td>
+            <td>{% if r.seller_name is none %}<span class="null">null</span>{% else %}{{ r.seller_name }}{% endif %}</td>
+            <td class="num">{% if r.total is none %}<span class="null">null</span>{% else %}{{ "{:,.2f}".format(r.total) }}{% endif %}</td>
+            <td>{% if r.status == 'done' %}{{ 'yes' if r.needs_review else 'no' }}{% endif %}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

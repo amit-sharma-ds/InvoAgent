@@ -1,0 +1,15 @@
+# Server install (Docker / Render): the web app and OCR only, pinned to the versions tested on the dev PC.
+# Leaves out the dev and test tools and sentence-transformers (torch needs over 1 GB of RAM; the app then
+# matches labels with its synonym list + rapidfuzz, which gave the same results on every test set).
+# Full local install: requirements.txt
+Flask==3.1.3
+waitress==3.0.2
+openpyxl==3.1.5
+pymupdf==2.1
+pillow==13.0.0
+numpy==2.5.4
+opencv-python-headless==5.0.0.93
+pytesseract==0.3.13
+RapidFuzz==3.14.6
+python-dateutil==4.0.0
+requests==2.34.2
