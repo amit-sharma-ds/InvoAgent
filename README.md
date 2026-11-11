@@ -2,6 +2,9 @@
 
 # InvoAgent
 
+**Live:** https://invoagent.onrender.com (Render free plan: it sleeps after 15 minutes without visits and wakes
+in about a minute; stored invoices are reset when it restarts or is redeployed; OCR of photos is slow on its 0.1 CPU).
+
 Invoice data from PDFs, scans and phone photos. Extract structured data from invoices in any layout (text PDFs, scanned PDFs, scans, phone photos),
 store every result in a database, review it in a table, and export it to Excel / CSV.
 Built for volume: hundreds or thousands of invoices are processed in parallel in the background.
