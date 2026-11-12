@@ -18,13 +18,15 @@ RUN pip install --no-cache-dir -r requirements-deploy.txt
 COPY . .
 
 # Data (database, stored invoices, users) lives in /var/data: mount a persistent disk there.
-# One worker thread fits small cloud instances; raise INVOICE_WORKERS on bigger ones.
+# One worker thread fits small cloud instances; raise INVOICE_WORKERS and PHOTO_OCR_THREADS
+# (phone-photo OCR) on bigger ones.
 ENV PYTHONUNBUFFERED=1 \
     TESSERACT_CMD=/usr/bin/tesseract \
     INVOICE_DATA_DIR=/var/data \
     INVOICE_WORKERS=1 \
     USE_EMBEDDINGS=0 \
     OMP_THREAD_LIMIT=1 \
+    PHOTO_OCR_THREADS=1 \
     PORT=10000
 
 EXPOSE 10000

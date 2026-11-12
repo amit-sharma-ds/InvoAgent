@@ -11,6 +11,9 @@ opencv-python-headless>=4.9   # preprocessing, document-edge detection, camera f
 
 # OCR (needs the Tesseract program installed, see README)
 pytesseract>=0.3.10
+# Fast OCR for phone photos: PaddleOCR PP-OCRv6 tiny models (in invoice_parser/models) on ONNX Runtime
+rapidocr==3.10.0
+onnxruntime>=1.20
 
 # Field matching / normalisation
 rapidfuzz>=3.6          # fuzzy string matching for label synonyms

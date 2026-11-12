@@ -30,11 +30,16 @@ to finished result, one invoice at a time:
 | **Digital PDF** (Tally or other accounting export, an emailed PDF: it has a text layer) | **under 1 s** (about 0.03 s each in bulk) |
 | **Scanned PDF** (office scanner, a phone's *scan document* PDF: no text layer) | about **13 s** per page |
 | **Image file** PNG / JPG / JPEG / TIFF / BMP / WEBP (a 300-DPI scan) | about **18 s** per page |
-| **Phone photo** (browser camera on the *Phone camera* tab, or a photo from the gallery) | about **25-35 s**; a sideways photo about 10 s more; an upside-down one is read twice |
+| **Phone photo** (browser camera on the *Phone camera* tab, or a photo from the gallery) | about **4-7 s** (a SuperStore-style page ~4 s, a dense Tally GST page ~5-7 s); sideways the same; upside down about 10 s |
 
+- Phone photos are read by a small neural OCR model (PaddleOCR PP-OCRv6 tiny on ONNX Runtime) instead of
+  Tesseract: on the same photos and the same busy PC, 22-32 s became 5-10 s, with more fields right (40 of 40
+  instead of 35 of 40). A photo counts as a phone photo when it carries the camera's make/model (every phone
+  camera adds it) or comes from the app's camera page. Scans and other images keep Tesseract.
 - The file type does not change the speed: a PNG and a JPG of the same page take the same time. The number of
   pixels and the amount of text do.
-- With other heavy programs running at the same time, phone photos took 60-110 s on this PC.
+- All times above were measured while another program on this PC used 65-83% of the CPU; on a free PC they
+  are lower.
 - The first invoice after starting the app takes 1-2 minutes longer while the label model loads (not on the
   server image, which has no model).
 - A faster CPU or a server with more cores is the way to go much faster; see [Deploying online](#deploying-online-github--render).
@@ -111,7 +116,8 @@ being processed at that moment is not deleted.
 | Background processing | Worker **threads** with a database-backed queue | Tesseract runs as a separate program, so threads OCR several files at once while the model is loaded once. Crash-safe: unfinished files are retried |
 | Digital PDF text | **PyMuPDF** | Reads the text layer with exact word positions (milliseconds per file) |
 | Image cleanup | **OpenCV** | Finds page edges in phone photos and flattens perspective, evens out shadows, straightens skew |
-| OCR | **Tesseract 5** via `pytesseract` | Free, accurate on printed text, gives word boxes and confidence |
+| OCR | **Tesseract 5** via `pytesseract` | Free, accurate on printed text, gives word boxes and confidence. Used for scanned PDFs and image files |
+| Phone-photo OCR | **RapidOCR** with PaddleOCR's **PP-OCRv6 tiny** models on **ONNX Runtime** (CPU) | Neural text detection and recognition, 6 MB of models shipped in `invoice_parser/models` (Apache-2.0, checked by SHA-256, nothing downloaded at run time). About 5x faster than Tesseract on phone photos and reads tilted, shadowed photos cleanly |
 | Label matching | Synonyms + **rapidfuzz** + **sentence-transformers** `all-MiniLM-L6-v2` | "Vendor", "Seller", "Supplier", "Billed by" get the same meaning; unknown wording still works. Decisions are cached on disk |
 | Field parsing | Regular expressions, **python-dateutil**, custom amount parser | `1,234.50`, `1.234,50`, `1,23,456.00`, `05/03/2024`, `3 Mar 2024`, GSTIN / VAT IDs, e-mail, phone |
 | Table parsing | Row heuristics with a `qty x rate = amount` check | Line items are verified arithmetically, which catches OCR digit errors |
@@ -209,17 +215,24 @@ python scripts/import_folder.py "D:\Invoices\2024" --export "D:\Invoices\2024.xl
 | Digital PDF (has a text layer) | about 0.03 s per file |
 | 300-DPI scanned invoice images (public dataset, 50 files) | 175 s in total, about 3.5 s per page |
 
-| Phone photo (12-50 MP, one at a time) | about 25-35 s; a sideways photo about 10 s more, an upside-down one is read twice |
+| Phone photo (12-50 MP, one at a time) | about 4-7 s (fast neural OCR); upside down about 10 s |
 
 This PC has a 2-core / 4-thread CPU (Intel i3-3240), and while these were measured another Python program on
-port 8000 kept one CPU thread busy all the time; closing it, or a PC with more cores, makes photos noticeably faster.
-Most of a photo's time is Tesseract reading a large page and the tilt measurement. A PDF from a phone's
-*scan document* feature (already cropped and flat) is faster and usually more accurate than a plain photo.
+port 8000 used 65-83% of the CPU; closing it, or a PC with more cores, makes photos noticeably faster.
+Most of a photo's time is the OCR model reading every text line (about 75 lines on a Tally invoice).
 
 So 1,000 digital PDFs take under a minute, and 1,000 scanned 300-DPI pages take about an hour on this 4-core PC.
 More cores scale it almost linearly (`INVOICE_WORKERS`); an 8-core server roughly halves the time.
 
 What was made faster:
+- **Phone photos: 22-32 s → 5-10 s** (same photos, same busy PC). Tesseract was replaced for camera photos by
+  PaddleOCR's PP-OCRv6 *tiny* text detector and recogniser (6 MB, ONNX Runtime on the CPU, via RapidOCR). Text
+  lines are found on a 1280 px copy of the page and read from a 2000 px copy, 16 lines per model call. No light
+  flattening, deskewing or line removal is needed: tilted rows are levelled from the slope of the nearby text
+  lines (a bent page tilts differently at the top and bottom). A sideways page is turned and a quick check of its
+  8 widest lines decides which way up it is. Accuracy went up: real Tally photos 90 of 90 fields, SuperStore
+  photos 132 of 132. Tried and not used: finding lines on a 960 px copy (missed the Tally subtotal on 5 of 9
+  photos), an int8 version of the model (no faster on this CPU, worse text), 4 threads (slower than 2 here).
 - The embedding model used to load at every start (72 s here). It now loads only when a never-seen label appears,
   and every label decision is saved in `data/label_cache.json`, so repeated labels never need the model again.
 - Preprocessing was simplified. It is faster, and accuracy on scans went from 34% to 100% (see below).
@@ -336,10 +349,9 @@ turned upright automatically: phones often store a photo of paper lying flat on 
 tag. For best results, lay the paper flat, fill the frame with it, and avoid strong glare and shadows.
 
 **Tested on real phone photos of a Tally GST invoice** (6 photos taken with a phone, plus one of them turned
-sideways both ways and upside down = 9 pictures, 10 fields each): invoice number, date, seller, buyer,
-subtotal, tax and total are right on **9 of 9**; the PO number on 4 of 9 and the seller GSTIN on 5 of 9 (printed
-small, read unclearly). Overall 81 of 90 fields. Before these changes the sideways photo gave nothing and a
-photo whose Total row came out tilted gave total = 1 (the quantity '1 NOS').
+sideways both ways and upside down = 9 pictures, 10 fields each): **90 of 90 fields** right with the fast neural
+OCR, including the PO number and both GSTINs (Tesseract got 81 of 90: the PO number and seller GSTIN, printed
+small, were often unreadable). Five more photos of the same invoice in the Live workspace: all fields right.
 
 ---
 
@@ -426,7 +438,7 @@ python scripts/evaluate.py --dir datasets/katanaml/test
 | **katanaml invoices-donut-data-v1** (Hugging Face, **MIT license**, no login): https://huggingface.co/datasets/katanaml-org/invoices-donut-data-v1 | 501 realistic invoice images (seller / client columns, tax IDs, item and summary tables) with labelled fields. The 26 test and 50 validation invoices are in `datasets/katanaml/` after the download command below | 99.3% (test), 99.6% (validation) |
 | Synthetic set made by `scripts/make_sample_invoices.py` | 20 invoices in 5 layouts (GST India, EU, US classic, label-only, vendor) × 4 forms (digital PDF, scan, scanned PDF, phone photo) | 100% |
 | SuperStore layout | 200 PDFs + 40 scans / photos + 12 phone-style photos | 100% / 39 of 40 / 12 of 12 |
-| Real phone photos of a Tally GST invoice | 6 photos + 3 turned copies | key amounts and parties 9 of 9 |
+| Real phone photos of a Tally GST invoice | 6 photos + 3 turned copies | 90 of 90 fields |
 
 **Best single public dataset for wider testing: DocILE** (Rossum), https://github.com/rossumai/docile ·
 https://docile.rossum.ai. About 6,700 real business documents (mostly invoices, scanned and digital, many
@@ -469,8 +481,9 @@ tested Windows install (checked by hash), and the web app. Render (or any Docker
 
 1. Render → **New → Web Service** → connect this GitHub repository (or paste its public URL). Render detects the
    Dockerfile; leave the start command empty.
-2. **Instance type.** OCR needs CPU. On Render's free instance (0.1 CPU) a phone photo takes several minutes; a
-   1-CPU instance is about as fast as the development PC.
+2. **Instance type.** OCR needs CPU. A phone photo needs about 5-8 s of CPU time, so Render's free instance
+   (0.1 CPU) should take roughly a minute per photo (estimated, not yet measured there); scans read by Tesseract
+   take several minutes there. A 1-CPU instance is about as fast as the development PC.
 3. **Environment variables:**
 
    | Name | Value |
@@ -519,6 +532,8 @@ Set these as environment variables (PowerShell: `$env:NAME="value"`):
 | `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Any sentence-transformers model |
 | `DAY_FIRST` | `1` | Fallback for ambiguous dates such as `05/03/2024` when the invoice gives no clue (see below) |
 | `OCR_TEXT_PX` | `18` | Pages are scaled so letters are about this many pixels tall before OCR |
+| `FAST_PHOTO_OCR` | `1` | `0` reads phone photos with Tesseract instead of the fast neural OCR |
+| `PHOTO_OCR_THREADS` | all cores (`1` in the Docker image) | CPU threads for the phone-photo OCR |
 | `MAX_UPLOAD_MB` | `300` | Browser upload limit per request (use the folder import for more) |
 | `FLASK_SECRET_KEY` | random, in `data/secret_key` | Session signing key (set it only to share one key between servers) |
 
@@ -537,6 +552,8 @@ invoice_parser/
   ingest.py                 PDF / image / multi-page TIFF loading, text layer vs OCR
   preprocess.py             page-edge flattening, light flattening, deskew
   ocr.py                    Tesseract wrapper (word boxes + confidence)
+  fast_ocr.py               phone-photo OCR: PP-OCRv6 tiny models on ONNX Runtime (RapidOCR)
+  models/                   the two PP-OCRv6 tiny model files (6 MB)
   layout.py                 words -> lines -> cells
   matcher.py                label -> field: exact, fuzzy, embedding (+ label cache)
   schema.py                 canonical fields, synonyms, guard words

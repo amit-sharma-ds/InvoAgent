@@ -311,6 +311,11 @@ _QTY_UNIT_RE = re.compile(r"(?i)(?<![\w.,])\d[\d,.]*\s*(?:nos|no|pcs|pc|pieces?|
                           r"|mtrs?|meters?|sets?|boxes|box|bags?|pairs?|dozens?|each)\b\.?")
 
 
+# a number after a phone label: "Mob.:8535000042", "Ph: 0129-2234567", "Contact : 98711 82389"
+_PHONE_NUMBER_RE = re.compile(r"(?i)\b(?:mob|mobile|ph|phone|tel|telephone|cell|contact|fax|whatsapp)\b\.?"
+                              r"\s*(?:no\.?)?\s*[:\-]?\s*\+?\d[\d\s\-/,]{5,}")
+
+
 def _amount_same_row(c, lines, label_lines=frozenset()):
     """The amount printed at the same height as its label, further right, when OCR put it on a line
     of its own. On a tilted or curved photo the right end of a row sits a little higher or lower, so
@@ -375,6 +380,7 @@ def _resolve(c, lines, label_lines, kind, day_first=None, label_cells=frozenset(
         value = nz.find_date(text, day_first)
     elif kind == "amount":
         text = _QTY_UNIT_RE.sub(" ", text)  # "Total | 1 NOS | 2,95,000.00": the quantity is not money
+        text = _PHONE_NUMBER_RE.sub(" ", text)  # "Tax Invoice  Mob.:8535000042": a phone number is not money
         value = _cell_number(text)
         if value is None:
             value = _last_amount(text)
@@ -580,7 +586,15 @@ def _looks_like_name(name):
     """A party name has a word of 3+ letters and is not a tax ID or a bare number ('O6AABCL3501H1Z0')."""
     if not name or not re.search(r"[A-Za-z]{3,}", name):
         return False
-    return not (nz.find_gstin(name) and len(re.sub(r"[^0-9A-Za-z]", "", name)) <= 16)
+    if not nz.find_gstin(name):
+        return True
+    # with a GSTIN in it, a word of the name must remain besides the ID and its label: a photo cut the
+    # 'G' off 'GSTIN:09DFIPA7756B1ZH', and 'STIN' was taken for a seller's name
+    words = [t for t in re.findall(r"[A-Za-z0-9]+", name) if not re.search(r"\d", t)]
+    return any(len(t) >= 3 and t.upper() not in _ID_LABEL_WORDS for t in words)
+
+
+_ID_LABEL_WORDS = {"GSTIN", "STIN", "GST", "GSTN", "UIN", "TIN", "PAN", "VAT", "NO", "NUMBER", "REG"}
 
 
 def _seller_from_signature(lines, label_cells):

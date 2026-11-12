@@ -39,6 +39,32 @@ def preprocess_scan(img, photo: bool = False, text_px=None):
     return _remove_ruled_lines(gray) if photo else gray
 
 
+CAMERA_WORK_SIDE = 2600  # phone photos are cut out on a copy this size (the fast reader reads 2000 px)
+
+
+def prepare_camera_photo(img):
+    """A phone photo for the fast neural reader (fast_ocr.py): the page cut out of the photo and
+    warped flat, and a page photographed sideways given a quarter turn. Returns (image, turned):
+    after a quarter turn the text may still be upside down, which the reader checks.
+
+    Nothing else is done: the neural models read shadows, small tilts, ruled lines and white-on-dark
+    text as they are, so the steps Tesseract needs (light flattening, deskewing, line removal,
+    enlarging) would only cost time."""
+    color = img if img.ndim == 3 else cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    longest = max(color.shape[:2])
+    if longest > CAMERA_WORK_SIDE:
+        f = CAMERA_WORK_SIDE / longest
+        color = cv2.resize(color, None, fx=f, fy=f, interpolation=cv2.INTER_AREA)
+    gray = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY)
+    quad = _find_document_quad(gray)
+    if quad is not None:
+        color = _four_point_warp(color, quad)
+        gray = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY)
+    if _text_runs_vertically(gray):  # photographed sideways (phone held flat, no rotation tag)
+        return np.ascontiguousarray(np.rot90(color, 1)), True
+    return color, False
+
+
 def _remove_ruled_lines(gray):
     """Erase long horizontal / vertical table lines. Box borders touching the text confuse OCR on
     form-style invoices (Tally etc.): on real phone photos this raised correct key values from 7-8

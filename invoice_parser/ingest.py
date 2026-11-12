@@ -3,19 +3,24 @@
 * PDF with a text layer  -> words read directly (exact, no OCR needed)
 * PDF without text (scan) -> page rendered at RENDER_DPI, then OCR
 * Image (jpg/png/...)     -> preprocessed (photo mode), then OCR
+* Camera photo             -> page cut out, then the fast neural OCR (fast_ocr.py); Tesseract if
+                              that is not installed
 * Multi-page TIFF          -> every page OCR'd
 """
 import io
+import logging
 from pathlib import Path
 
 import cv2
 import fitz  # PyMuPDF
 import numpy as np
 
-from . import config
+from . import config, fast_ocr
 from .models import Page, Word
 from .ocr import best_quarter_turn, ocr_image
-from .preprocess import preprocess_scan
+from .preprocess import prepare_camera_photo, preprocess_scan
+
+log = logging.getLogger(__name__)
 
 
 class UnsupportedFileError(ValueError):
@@ -27,7 +32,7 @@ def load_pages(filename: str, data: bytes):
     if ext in config.PDF_EXTENSIONS:
         return _load_pdf(data)
     if ext in config.IMAGE_EXTENSIONS:
-        return _load_images(data, ext)
+        return _load_images(data, ext, filename)
     raise UnsupportedFileError(f"Unsupported file type '{ext}'. Use PDF or an image.")
 
 
@@ -58,13 +63,18 @@ def _load_pdf(data: bytes):
     return pages
 
 
-def _load_images(data: bytes, ext: str):
+def _load_images(data: bytes, ext: str, filename: str = ""):
     frames = _tiff_frames(data) if ext in (".tif", ".tiff") else []
     if not frames:
         arr = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
         if arr is None:
             raise UnsupportedFileError("Could not read this image file.")
         frames = [arr]
+    if (_is_camera_photo(data) or _from_app_camera(filename)) and fast_ocr.available():
+        try:
+            return [_read_camera_photo(arr, i) for i, arr in enumerate(frames)]
+        except Exception:  # never lose a photo to the fast reader: Tesseract below reads it instead
+            log.exception("Fast photo OCR failed for %s; using Tesseract", filename or "an image")
     # Camera photos are softer than scans and read best with larger text (24 px instead of 18 px).
     text_px = config.OCR_PHOTO_TEXT_PX if _is_camera_photo(data) else config.OCR_TEXT_PX
     pages = []
@@ -85,6 +95,19 @@ def _load_images(data: bytes, ext: str):
 # Mean OCR confidence under which a photo is checked for being upside down. Upright phone photos
 # read at 0.6-0.85; an upside-down page reads well below 0.5.
 UPSIDE_DOWN_CHECK_BELOW = 0.55
+
+
+def _read_camera_photo(arr, index):
+    """A phone photo through the fast reader (an upside-down page is turned inside read_photo)."""
+    img, turned = prepare_camera_photo(arr)
+    words, conf = fast_ocr.read_photo(img, index, check_upside_down=turned)
+    return Page(index, words, "ocr", conf)
+
+
+def _from_app_camera(filename: str) -> bool:
+    """Pictures taken with the app's own camera page (IP Webcam / DroidCam / webcam): their frames
+    carry no camera EXIF, so they are recognised by the names the app gives them."""
+    return Path(filename).name.lower().startswith(("phone-", "webcam-"))
 
 
 def _is_camera_photo(data: bytes) -> bool:

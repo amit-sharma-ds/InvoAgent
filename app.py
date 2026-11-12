@@ -27,7 +27,7 @@ from pathlib import Path
 from flask import (Flask, Response, abort, flash, jsonify, redirect, render_template, request,
                    send_file, session, url_for)
 
-from invoice_parser import auth, config
+from invoice_parser import auth, config, fast_ocr
 from invoice_parser.camera import (DROIDCAM_PORTS, CameraError, PhoneStream, droidcam_client_running,
                                    fetch_ip_camera_frame, find_phones, grab_local_camera, load_settings,
                                    save_settings)
@@ -663,6 +663,7 @@ def start_background_work():
     for w in workers.values():
         w.start()
     threading.Thread(target=lambda: get_parser().matcher.warm_up(), daemon=True).start()
+    threading.Thread(target=fast_ocr.warm_up, daemon=True).start()  # phone-photo OCR models
 
 
 if __name__ == "__main__":
