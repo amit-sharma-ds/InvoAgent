@@ -30,15 +30,15 @@ to finished result, one invoice at a time:
 | **Digital PDF** (Tally or other accounting export, an emailed PDF: it has a text layer) | **under 1 s** (about 0.03 s each in bulk) |
 | **Scanned PDF** (office scanner, a phone's *scan document* PDF: no text layer) | about **13 s** per page |
 | **Image file** PNG / JPG / JPEG / TIFF / BMP / WEBP (a 300-DPI scan) | about **18 s** per page |
-| **Phone photo** (browser camera on the *Phone camera* tab, or a photo from the gallery) | about **4-7 s** (a SuperStore-style page ~4 s, a dense Tally GST page ~5-7 s); sideways the same; upside down about 10 s |
+| **Phone photo** (browser camera on the *Phone camera* tab, or a photo from the gallery) | about **3-5 s** (a SuperStore-style page ~3 s, a dense Tally GST page ~4-5 s); sideways about 5 s; upside down about 7 s |
 
 - Phone photos are read by a small neural OCR model (PaddleOCR PP-OCRv6 tiny on ONNX Runtime) instead of
-  Tesseract: on the same photos and the same busy PC, 22-32 s became 5-10 s, with more fields right (40 of 40
-  instead of 35 of 40). A photo counts as a phone photo when it carries the camera's make/model (every phone
+  Tesseract: on the same photos and the same busy PC, 22-32 s became about 4-5 s, with more fields right (40 of
+  40 instead of 35 of 40). A photo counts as a phone photo when it carries the camera's make/model (every phone
   camera adds it) or comes from the app's camera page. Scans and other images keep Tesseract.
 - The file type does not change the speed: a PNG and a JPG of the same page take the same time. The number of
   pixels and the amount of text do.
-- All times above were measured while another program on this PC used 65-83% of the CPU; on a free PC they
+- All times above were measured while another program on this PC used 30-90% of the CPU; on a free PC they
   are lower.
 - The first invoice after starting the app takes 1-2 minutes longer while the label model loads (not on the
   server image, which has no model).
@@ -215,24 +215,32 @@ python scripts/import_folder.py "D:\Invoices\2024" --export "D:\Invoices\2024.xl
 | Digital PDF (has a text layer) | about 0.03 s per file |
 | 300-DPI scanned invoice images (public dataset, 50 files) | 175 s in total, about 3.5 s per page |
 
-| Phone photo (12-50 MP, one at a time) | about 4-7 s (fast neural OCR); upside down about 10 s |
+| Phone photo (12-50 MP, one at a time) | about 3-5 s (fast neural OCR); upside down about 7 s |
 
 This PC has a 2-core / 4-thread CPU (Intel i3-3240), and while these were measured another Python program on
-port 8000 used 65-83% of the CPU; closing it, or a PC with more cores, makes photos noticeably faster.
+port 8000 used 30-90% of the CPU; closing it, or a PC with more cores, makes photos noticeably faster.
 Most of a photo's time is the OCR model reading every text line (about 75 lines on a Tally invoice).
 
 So 1,000 digital PDFs take under a minute, and 1,000 scanned 300-DPI pages take about an hour on this 4-core PC.
 More cores scale it almost linearly (`INVOICE_WORKERS`); an 8-core server roughly halves the time.
 
 What was made faster:
-- **Phone photos: 22-32 s → 5-10 s** (same photos, same busy PC). Tesseract was replaced for camera photos by
+- **Phone photos: 22-32 s → 4-5 s** (same photos, same busy PC). Tesseract was replaced for camera photos by
   PaddleOCR's PP-OCRv6 *tiny* text detector and recogniser (6 MB, ONNX Runtime on the CPU, via RapidOCR). Text
-  lines are found on a 1280 px copy of the page and read from a 2000 px copy, 16 lines per model call. No light
-  flattening, deskewing or line removal is needed: tilted rows are levelled from the slope of the nearby text
-  lines (a bent page tilts differently at the top and bottom). A sideways page is turned and a quick check of its
-  8 widest lines decides which way up it is. Accuracy went up: real Tally photos 90 of 90 fields, SuperStore
-  photos 132 of 132. Tried and not used: finding lines on a 960 px copy (missed the Tally subtotal on 5 of 9
-  photos), an int8 version of the model (no faster on this CPU, worse text), 4 threads (slower than 2 here).
+  lines are found on a 1280 px copy of the page and read from a 2000 px copy. No light flattening, deskewing or
+  line removal is needed: tilted rows are levelled from the slope of the nearby text lines (a bent page tilts
+  differently at the top and bottom). A sideways page is turned and a quick check of its 8 widest lines decides
+  which way up it is. Accuracy went up: real Tally photos 90 of 90 fields, SuperStore photos 132 of 132.
+- **Phone photos, second step: 35% less CPU per photo, 3-4x less waiting on the busy PC** (old and new reader
+  run in turn on the same photos: 16-18 s → about 4 s each, CPU 6.3 s → 4.1 s, same fields right):
+  - Text lines are read in batches of lines of about the same width. The library padded every line to at least
+    320 px and read 16 lines of mixed widths per call, so about half the work was padding.
+  - ONNX Runtime's idle threads sleep instead of spinning; spinning threads fought the other program for the
+    CPU.
+  - The text lines are found once: the which-way-up check of a sideways page and the second reading of an upside
+    down page reuse them, turned with the page. The check reads its 16 line pieces in one model call.
+- Tried and not used for photos: finding lines on a 960 px copy (missed the Tally subtotal on 5 of 9 photos), an
+  int8 version of the model (no faster on this CPU, worse text), 4 threads (slower than 2 here).
 - The embedding model used to load at every start (72 s here). It now loads only when a never-seen label appears,
   and every label decision is saved in `data/label_cache.json`, so repeated labels never need the model again.
 - Preprocessing was simplified. It is faster, and accuracy on scans went from 34% to 100% (see below).
@@ -481,9 +489,9 @@ tested Windows install (checked by hash), and the web app. Render (or any Docker
 
 1. Render → **New → Web Service** → connect this GitHub repository (or paste its public URL). Render detects the
    Dockerfile; leave the start command empty.
-2. **Instance type.** OCR needs CPU. A phone photo needs about 5-8 s of CPU time, so Render's free instance
-   (0.1 CPU) should take roughly a minute per photo (estimated, not yet measured there); scans read by Tesseract
-   take several minutes there. A 1-CPU instance is about as fast as the development PC.
+2. **Instance type.** OCR needs CPU. A phone photo needs about 3-5 s of CPU time, so Render's free instance
+   (0.1 CPU) is slower than the development PC (not timed there); scans read by Tesseract take several minutes
+   there. A 1-CPU instance is about as fast as the development PC.
 3. **Environment variables:**
 
    | Name | Value |

@@ -5,8 +5,8 @@ CPU with ONNX Runtime (through RapidOCR). Both models ship with the app (invoice
 Why: Tesseract needed 25-35 s for a phone photo on the 2-core dev PC (minutes on a small server),
 mostly for reading a 2000x3000 page at large letter size, deskewing it and re-reading doubtful
 words. These neural models find the text lines on a small copy of the page and read each line
-from a 2000 px copy: about 3-4 s for a full Tally invoice on the same busy PC, with cleaner text
-(GSTINs and invoice numbers came out exactly, tilted photos need no deskew pass).
+from a 2000 px copy: about 4 s for a full Tally invoice on the same busy PC (whole parse), with
+cleaner text (GSTINs and invoice numbers came out exactly, tilted photos need no deskew pass).
 
 Only camera photos use it (ingest.py decides); PDFs, scans and other images keep Tesseract.
 """
@@ -27,7 +27,13 @@ REC_MODEL = MODEL_DIR / "PP-OCRv6_rec_tiny.onnx"  # sha256 e16e242de5937ad926092
 
 READ_SIDE = 2000  # longest side of the page the text lines are cut from (recognition quality)
 FIND_SIDE = 1280  # longest side of the copy the text lines are found on (detection time grows with pixels)
-BATCH = 16        # text lines read per model call (6, the library default, was ~2x slower on the dev PC)
+# Text lines are read in batches of lines of about the same width, because every line of a batch is
+# padded to the widest one. The library pads every line to at least 320 px (6.7 line heights) and
+# batches lines in order of width, 16 at a time: most invoice lines are 2-5 heights wide, so about
+# half the reading work went into padding.
+BATCH = 24             # most text lines read per model call
+LINE_MIN_WIDTH = 2.0   # shorter lines are padded to this width (in line heights)
+GROUP_SPREAD = 1.3     # a batch takes lines up to this many times as wide as its narrowest
 # Share of lines read with 0.9+ confidence under which the page is tried upside down. Upright
 # photos of the test sets: 0.9-1.0; the same photos upside down: 0.1-0.2.
 UPSIDE_DOWN_BELOW = 0.5
@@ -58,7 +64,7 @@ def _get_engine():
         if _engine is None:
             from rapidocr import RapidOCR
 
-            _engine = RapidOCR(params={
+            engine = RapidOCR(params={
                 "Global.log_level": "error",
                 "Global.use_cls": False,  # page orientation is handled for the whole page (below, preprocess)
                 "Global.max_side_len": 4000,
@@ -66,18 +72,36 @@ def _get_engine():
                 "Det.limit_type": "max",
                 "Det.limit_side_len": FIND_SIDE,
                 "Rec.model_path": str(REC_MODEL),
-                "Rec.rec_batch_num": BATCH,
                 "EngineConfig.onnxruntime.intra_op_num_threads": THREADS or -1,
-                "EngineConfig.onnxruntime.enable_cpu_mem_arena": True,  # 5-10% faster on the dev PC
             })
+            # The library's model wrappers are used (image preparation, decoding, word boxes), with
+            # ONNX Runtime sessions of our own, whose idle threads sleep instead of spinning: on the
+            # dev PC, sharing the CPU with another busy program, that took 20-25% less CPU per photo.
+            engine._load_det_model().session.session = _session(DET_MODEL)
+            engine._load_rec_model().session.session = _session(REC_MODEL)
+            _engine = engine
         return _engine
+
+
+def _session(model_path):
+    import onnxruntime as ort
+
+    opts = ort.SessionOptions()
+    opts.log_severity_level = 4
+    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    opts.enable_cpu_mem_arena = True  # 5-10% faster on the dev PC
+    if THREADS:
+        opts.intra_op_num_threads = THREADS
+    opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    return ort.InferenceSession(str(model_path), sess_options=opts, providers=["CPUExecutionProvider"])
 
 
 def warm_up():
     """Load the models (about a second) so the first photo does not wait for it."""
     if available():
-        with _run_lock:
-            _get_engine()(np.full((64, 256, 3), 255, np.uint8), use_det=True, use_cls=False, use_rec=True)
+        img = np.full((64, 320, 3), 255, np.uint8)
+        cv2.putText(img, "Invoice 123", (8, 44), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 0), 2)
+        read_photo(img, 0)
 
 
 def read_photo(img, page_index: int, check_upside_down: bool = False):
@@ -85,81 +109,113 @@ def read_photo(img, page_index: int, check_upside_down: bool = False):
     right, possibly upside down). Returns (words, mean_confidence) like ocr.ocr_image.
 
     check_upside_down: the page was given a quarter turn (photographed sideways), so it is upside
-    down half the time; a quick check (about half a second) decides before the full reading.
-    Otherwise the page is read as it is, and read again turned round only when it reads poorly."""
+    down half the time; its widest lines are read both ways round to decide before the full reading.
+    Otherwise the page is read as it is, and read again turned round only when it reads poorly.
+    The text lines are found once: a turned page reuses them, turned with it."""
     if img.ndim == 2:
         img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
     longest = max(img.shape[:2])
     if longest > READ_SIDE:
         f = READ_SIDE / longest
         img = cv2.resize(img, None, fx=f, fy=f, interpolation=cv2.INTER_AREA)
-    if check_upside_down and _reads_better_turned(img):
-        img = np.ascontiguousarray(np.rot90(img, 2))
-    words, conf, sure = _read(img, page_index)
-    if sure < UPSIDE_DOWN_BELOW:  # poor reading: the page may be upside down
-        flipped = np.ascontiguousarray(np.rot90(img, 2))
-        words2, conf2, sure2 = _read(flipped, page_index)
-        if sure2 > sure:
-            return words2, conf2
+    with _run_lock:
+        engine = _get_engine()
+        boxes = _find_lines(engine, img)
+        if boxes is None:
+            return [], 0.0
+        if check_upside_down and _reads_better_turned(engine, img, boxes):
+            img, boxes = _turn_round(engine, img, boxes)
+        words, conf, sure = _read(engine, img, boxes, page_index)
+        if sure < UPSIDE_DOWN_BELOW:  # poor reading: the page may be upside down
+            words2, conf2, sure2 = _read(engine, *_turn_round(engine, img, boxes), page_index)
+            if sure2 > sure:
+                return words2, conf2
     return words, conf
 
 
-PROBE_SIDE = 960   # the page copy the probe finds text lines on
-PROBE_LINES = 8    # widest text lines the probe reads both ways round
+def _find_lines(engine, img):
+    """Corner points (n x 4 x 2: top-left, top-right, bottom-right, bottom-left) of the page's text
+    lines, top to bottom; None when there is no text."""
+    found = engine.text_det(img)
+    if found.boxes is None or not len(found.boxes):
+        return None
+    return np.asarray(found.boxes, dtype=np.float32)
 
 
-def _reads_better_turned(img):
+def _turn_round(engine, img, boxes):
+    """The page and its text lines turned 180 degrees."""
+    h, w = img.shape[:2]
+    turned = boxes.copy()
+    turned[..., 0] = w - turned[..., 0]
+    turned[..., 1] = h - turned[..., 1]
+    turned = np.roll(turned, 2, axis=1)  # the old bottom-right corner is the new top-left one
+    return np.ascontiguousarray(img[::-1, ::-1]), engine.text_det.sorted_boxes(turned)
+
+
+PROBE_LINES = 8  # widest text lines the upside-down check reads both ways round
+
+
+def _reads_better_turned(engine, img, boxes):
     """True when the page's widest text lines read with more confidence turned 180 degrees."""
-    f = PROBE_SIDE / max(img.shape[:2])
-    small = cv2.resize(img, None, fx=f, fy=f, interpolation=cv2.INTER_AREA) if f < 1 else img
-    f = min(f, 1.0)
-    with _run_lock:
-        engine = _get_engine()
-        found = engine(small, use_det=True, use_cls=False, use_rec=False)
-        boxes = getattr(found, "boxes", None)
-        if boxes is None or not len(boxes):
-            return False
-        lines = []
-        for quad in boxes:
-            quad = np.asarray(quad, dtype=np.float32)[:4] / f
-            width, height = np.linalg.norm(quad[1] - quad[0]), np.linalg.norm(quad[3] - quad[0])
-            if width >= 3 * height and height >= 4:
-                lines.append((width, quad))
-        lines.sort(key=lambda x: -x[0])
-        as_is = turned = 0.0
-        for width, quad in lines[:PROBE_LINES]:
-            crop = _cut_line(img, quad, width)
-            as_is += _line_score(engine, crop)
-            turned += _line_score(engine, np.ascontiguousarray(np.rot90(crop, 2)))
+    width = np.linalg.norm(boxes[:, 1] - boxes[:, 0], axis=1)
+    height = np.linalg.norm(boxes[:, 3] - boxes[:, 0], axis=1)
+    lines = [k for k in np.argsort(-width) if width[k] >= 3 * height[k] and height[k] >= 8][:PROBE_LINES]
+    if not lines:
+        return False
+    crops = engine.crop_text_regions(img, boxes[lines])
+    read = _recognize(engine.text_rec, crops + [np.ascontiguousarray(c[::-1, ::-1]) for c in crops])
+    as_is = sum(score for _, score, _ in read[:len(crops)])
+    turned = sum(score for _, score, _ in read[len(crops):])
     return turned > as_is
 
 
-def _cut_line(img, quad, width):
-    height = max(8, int(round(np.linalg.norm(quad[3] - quad[0]))))
-    dst = np.array([[0, 0], [width, 0], [width, height], [0, height]], dtype=np.float32)
-    matrix = cv2.getPerspectiveTransform(quad, dst)
-    return cv2.warpPerspective(img, matrix, (int(round(width)), height), borderMode=cv2.BORDER_REPLICATE)
+def _recognize(rec, crops, word_boxes=False):
+    """(text, confidence, character positions or None) for each cropped text line. Lines are sorted
+    by width and read in batches of about equally wide lines, so little of the work is padding."""
+    ratios = [c.shape[1] / c.shape[0] for c in crops]
+    order = np.argsort(ratios, kind="stable")
+    out = [None] * len(crops)
+    start = 0
+    while start < len(order):
+        end = start + 1
+        limit = GROUP_SPREAD * max(ratios[order[start]], LINE_MIN_WIDTH)
+        while end < len(order) and end - start < BATCH and ratios[order[end]] <= limit:
+            end += 1
+        batch = order[start:end]
+        widest = max(LINE_MIN_WIDTH, ratios[order[end - 1]])
+        pixels = np.stack([rec.resize_norm_img(crops[k], widest) for k in batch]).astype(np.float32)
+        lines, positions = rec.postprocess_op(rec.session(pixels), word_boxes,
+                                              wh_ratio_list=[ratios[k] for k in batch], max_wh_ratio=widest)
+        for m, k in enumerate(batch):
+            out[k] = (lines[m][0], float(lines[m][1]), positions[m] if word_boxes else None)
+        start = end
+    return out
 
 
-def _line_score(engine, crop):
-    out = engine(crop, use_det=False, use_cls=False, use_rec=True)
-    scores = getattr(out, "scores", None)
-    return float(scores[0]) if scores is not None and len(scores) else 0.0
-
-
-def _read(img, page_index):
+def _read(engine, img, boxes, page_index):
     """(words, mean confidence, share of lines read with 0.9+ confidence)."""
-    with _run_lock:
-        result = _get_engine()(img, use_det=True, use_cls=False, use_rec=True, return_word_box=True)
-    if result.boxes is None or not result.txts:
-        return [], 0.0, 0.0
+    from rapidocr.ch_ppocr_rec import TextRecOutput
+
+    crops = engine.crop_text_regions(img, boxes)
+    read = _recognize(engine.text_rec, crops, word_boxes=True)
     h, w = img.shape[:2]
-    scores = np.asarray(result.scores, dtype=float)
-    slopes = _slope_field(result.boxes)
+    boxes = boxes.copy()
+    boxes[..., 0] = np.clip(boxes[..., 0], 0, w)
+    boxes[..., 1] = np.clip(boxes[..., 1], 0, h)
+    # word / character boxes from the character positions, in page coordinates
+    located = engine.cal_rec_boxes(crops, boxes, TextRecOutput(txts=tuple(t for t, _, _ in read),
+                                                               word_results=tuple(p for _, _, p in read)))
+    parts_of = located.word_results if len(located.word_results) == len(read) else [()] * len(read)
+    keep = [k for k, (text, score, _) in enumerate(read) if text.strip() and score >= engine.text_score]
+    if not keep:
+        return [], 0.0, 0.0
+    scores = np.array([read[k][1] for k in keep])
+    slopes = _slope_field(boxes[keep])
     words = []
-    for k, line in enumerate(result.txts):
-        parts = result.word_results[k] if result.word_results and k < len(result.word_results) else ()
-        for text, score, pts in _line_words(line, scores[k], result.boxes[k], parts):
+    for k in keep:
+        line, line_score = read[k][0], read[k][1]
+        parts = [(t, s, b) for t, s, b in parts_of[k] if b is not None]
+        for text, score, pts in _line_words(line, line_score, boxes[k], parts):
             text = _clean(text)
             if not text:
                 continue
