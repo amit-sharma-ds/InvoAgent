@@ -28,14 +28,16 @@ to finished result, one invoice at a time:
 | What you upload | Time per invoice |
 |---|---|
 | **Digital PDF** (Tally or other accounting export, an emailed PDF: it has a text layer) | **under 1 s** (about 0.03 s each in bulk) |
-| **Scanned PDF** (office scanner, a phone's *scan document* PDF: no text layer) | about **13 s** per page |
-| **Image file** PNG / JPG / JPEG / TIFF / BMP / WEBP (a 300-DPI scan) | about **18 s** per page |
+| **Scanned PDF** (office scanner, a phone's *scan document* PDF: no text layer) | about **4-6 s** per page (was 13 s) |
+| **Image file** PNG / JPG / JPEG / TIFF / BMP / WEBP (a scan, a screenshot) | about **4-6 s** per page (was 18 s) |
 | **Phone photo** (browser camera on the *Phone camera* tab, or a photo from the gallery) | about **3-5 s** (a SuperStore-style page ~3 s, a dense Tally GST page ~4-5 s); sideways about 5 s; upside down about 7 s |
+| **Bill-book form filled in by hand** (photo or scan) | about **6-9 s** |
 
-- Phone photos are read by a small neural OCR model (PaddleOCR PP-OCRv6 tiny on ONNX Runtime) instead of
-  Tesseract: on the same photos and the same busy PC, 22-32 s became about 4-5 s, with more fields right (40 of
-  40 instead of 35 of 40). A photo counts as a phone photo when it carries the camera's make/model (every phone
-  camera adds it) or comes from the app's camera page. Scans and other images keep Tesseract.
+- Photos, scans and scanned PDFs are read by a small neural OCR model (PaddleOCR PP-OCRv6 tiny on ONNX
+  Runtime) instead of Tesseract: on the same phone photos and the same busy PC, 22-32 s became about 4-5 s with
+  more fields right (40 of 40 instead of 35 of 40); on scans it is 3-4x faster with the same accuracy (synthetic
+  set 672 of 672 fields, katanaml 282 of 284 and 526 of 528, exactly as with Tesseract). Tesseract is kept only as
+  a fallback. Pages written by hand get a second, larger model (see *Forms filled in by hand*).
 - The file type does not change the speed: a PNG and a JPG of the same page take the same time. The number of
   pixels and the amount of text do.
 - All times above were measured while another program on this PC used 30-90% of the CPU; on a free PC they
@@ -52,7 +54,6 @@ Every page has a **left sidebar** with one tab per job, so new features always g
 
 | Tab | What it is for |
 |---|---|
-| **Live / Demo switch** | Two separate workspaces, each with its own database and files (see below) |
 | **Overview** | Counts (invoices, need review, approved, rejected, possible duplicates, failed), amounts per currency, this month, recent invoices |
 | **Dashboard** | Invoice value by month (taxable value + GST stacked), top 10 vendors, totals; per currency, for the last 12 months, this / last financial year (Apr-Mar) or all years. Hover a bar for the numbers; "Show as a table" lists them |
 | **Upload** | Drop one PDF / photo (result opens at once) or many files / a ZIP (background batch) |
@@ -72,15 +73,21 @@ In every table a click anywhere on a row opens that invoice (Ctrl-click: new tab
 stored original file; it cannot be undone (back up the `data` folder first if unsure). An invoice that is
 being processed at that moment is not deleted.
 
-### Live and Demo workspaces
+### One shared database (MongoDB)
 
-- **Live** is for real company invoices. It starts empty. Upload one or two of your own PDFs/photos here and only
-  your results are shown.
-- **Demo** holds the sample and public-dataset invoices used during development (about 100), for showing the app
-  to someone without exposing company data. Sample invoices can only be added in Demo.
-- Each workspace has its own database and file folder: `data/live/` and `data/demo/`. Nothing is shared between
-  them, so switching never mixes data. The switch is remembered per browser.
-- The folder import takes `--workspace live|demo` (default `live`).
+- With a MongoDB connection string the app keeps everything in MongoDB, database **`invoagent`** (next to other
+  apps' databases on the same cluster): invoices, line items, approvals, corrections, batches and the original
+  files. Every computer and the Render server then show the same invoices, and a server restart loses nothing.
+- Give the connection string as the `MONGODB_URI` environment variable (Render: *Environment*), or on a PC put it
+  in `data/mongodb_uri.txt` (one line; `data/*.txt` is never committed). Never put it in the code or in Git.
+- **Space on a free 512 MB Atlas cluster:** a photo is stored as a JPEG of at most 2600 px (about 0.3-0.6 MB,
+  camera details kept), a PDF as it is. The invoice is always read from the full original first. When the whole
+  cluster would pass 450 MB (`MONGODB_FILES_LIMIT_MB`), new original files are no longer stored there (the
+  invoice data still is), so the cluster's other databases never run out of space.
+- Copy the invoices of a PC's SQLite database into MongoDB (ids, approvals and corrections kept, safe to repeat):
+  `python scripts/move_to_mongodb.py --dry-run`, then without `--dry-run`.
+- Without a connection string the app keeps SQLite in `data/live/` as before.
+- The earlier *Demo* workspace was removed; its folder `data/demo/` is left on disk untouched.
 
 ### What an accounts team does with an invoice here (review workflow)
 
@@ -116,8 +123,9 @@ being processed at that moment is not deleted.
 | Background processing | Worker **threads** with a database-backed queue | Tesseract runs as a separate program, so threads OCR several files at once while the model is loaded once. Crash-safe: unfinished files are retried |
 | Digital PDF text | **PyMuPDF** | Reads the text layer with exact word positions (milliseconds per file) |
 | Image cleanup | **OpenCV** | Finds page edges in phone photos and flattens perspective, evens out shadows, straightens skew |
-| OCR | **Tesseract 5** via `pytesseract` | Free, accurate on printed text, gives word boxes and confidence. Used for scanned PDFs and image files |
-| Phone-photo OCR | **RapidOCR** with PaddleOCR's **PP-OCRv6 tiny** models on **ONNX Runtime** (CPU) | Neural text detection and recognition, 6 MB of models shipped in `invoice_parser/models` (Apache-2.0, checked by SHA-256, nothing downloaded at run time). About 5x faster than Tesseract on phone photos and reads tilted, shadowed photos cleanly |
+| OCR | **RapidOCR** with PaddleOCR's **PP-OCRv6 tiny** models on **ONNX Runtime** (CPU) | Neural text detection and recognition for photos, scans and scanned PDFs, 6 MB of models shipped in `invoice_parser/models` (Apache-2.0, checked by SHA-256, nothing downloaded at run time). 3-5x faster than Tesseract with the same or better accuracy; reads tilted, shadowed photos cleanly |
+| Handwriting OCR | PaddleOCR's **PP-OCRv6 small** recogniser (21 MB, same folder) | Only on pages that read poorly (forms filled in by hand), only for their doubtful lines |
+| OCR fallback | **Tesseract 5** via `pytesseract` | Used only when the neural OCR is switched off or fails on a page |
 | Label matching | Synonyms + **rapidfuzz** + **sentence-transformers** `all-MiniLM-L6-v2` | "Vendor", "Seller", "Supplier", "Billed by" get the same meaning; unknown wording still works. Decisions are cached on disk |
 | Field parsing | Regular expressions, **python-dateutil**, custom amount parser | `1,234.50`, `1.234,50`, `1,23,456.00`, `05/03/2024`, `3 Mar 2024`, GSTIN / VAT IDs, e-mail, phone |
 | Table parsing | Row heuristics with a `qty x rate = amount` check | Line items are verified arithmetically, which catches OCR digit errors |
@@ -281,12 +289,9 @@ description, quantity, unit_price, amount`.
   sheet with every line item, click-to-sort columns, a filter box, "needs review only", and live totals per
   currency (USD, INR, EUR ... are never added together). Download buttons give the same data as Excel or CSV.
 
-**Where the data is stored:** Live: `data/live/invoices.db` (SQLite) and the original files in `data/live/files/`.
-Demo: the same under `data/demo/`. Back up by copying the `data` folder. `INVOICE_DATA_DIR` moves everything to
-another drive or folder.
-
-> The sample invoices imported during development (`classic_01.pdf`, `vendor_02_scan.png`, ...) are in the
-> **Demo** workspace only. The Live workspace is for real invoices.
+**Where the data is stored:** in MongoDB (database `invoagent`) when `MONGODB_URI` is set, else
+`data/live/invoices.db` (SQLite). Each computer also keeps the full original files it received in
+`data/live/files/`. `INVOICE_DATA_DIR` moves the local folder to another drive.
 
 ### JSON API (for other systems)
 
@@ -465,7 +470,7 @@ Other sets:
 | **SROIE** (ICDAR 2019) | Scanned receipts (company, date, total). Tests OCR more than invoice layout | https://www.kaggle.com/datasets/urbikn/sroie-datasetv2 |
 
 No good public dataset of Indian GST / Tally invoices exists. The most important test set is **100-200 of your
-own invoices** (Tally PDFs, scans and phone photos). Upload test files in the **Demo** workspace, not Live.
+own invoices** (Tally PDFs, scans and phone photos).
 
 ---
 
@@ -499,11 +504,14 @@ tested Windows install (checked by hash), and the web app. Render (or any Docker
    | `INVOICE_ADMIN_USER` | the first user name, e.g. `admin` |
    | `INVOICE_ADMIN_PASSWORD` | its password (8+ characters). Used only when no user exists yet |
    | `FLASK_SECRET_KEY` | optional: a long random string, so sign-ins survive restarts without a disk |
+   | `MONGODB_URI` | the MongoDB connection string (`mongodb+srv://...`). Keeps every invoice in MongoDB |
 
-4. **Persistent disk** (paid instances): mount path `/var/data`, 1 GB or more. Without a disk every restart or
-   deploy **erases** the database, the stored invoices and the users. Render's free instances have no disk and
-   go to sleep after 15 minutes without visits (the next visit takes about a minute to wake up).
-5. Health check path: `/health`.
+4. **MongoDB Atlas → Network Access** must allow Render's servers. A free Render instance has no fixed
+   address, so the access list needs `0.0.0.0/0` (the database user's password still protects it).
+5. **Data on the free instance:** with `MONGODB_URI` nothing is lost on a restart or deploy. Without it (or a paid
+   disk at `/var/data`) every restart **erases** the invoices. Free instances also sleep after 15 minutes without
+   visits (the next visit takes about a minute to wake up).
+6. Health check path: `/health`.
 
 Differences on the server: the sentence-transformers model is not installed (`USE_EMBEDDINGS=0`; it needs over
 1 GB of RAM). Labels are then matched with the synonym list and rapidfuzz; on every test set above the results
@@ -528,7 +536,10 @@ Set these as environment variables (PowerShell: `$env:NAME="value"`):
 | `INVOICE_PARSER_PORT` | `5077` | Web server port (kept away from Flask's common 5000). `PORT` (set by Render) is used when this is not set |
 | `INVOICE_ADMIN_USER` / `INVOICE_ADMIN_PASSWORD` | not set | Servers: create the first sign-in user at start when none exists |
 | `INVOICE_DATA_DIR` | `data` | Folder for the database, stored files and label cache |
-| `INVOICE_DB_PATH` | `data/live/invoices.db` | Live database file (Demo is always `data/demo/invoices.db`) |
+| `MONGODB_URI` | not set (`data/mongodb_uri.txt` on a PC) | MongoDB connection string: all data in MongoDB, shared by every computer and the server |
+| `MONGODB_DB` | `invoagent` | MongoDB database name |
+| `MONGODB_FILES_LIMIT_MB` | `450` | No more original files are stored in MongoDB once the whole cluster would pass this |
+| `INVOICE_DB_PATH` | `data/live/invoices.db` | SQLite database file (when `MONGODB_URI` is not set) |
 | `INVOICE_WORKERS` | CPU cores − 1 (max 8) | Parallel worker threads |
 | `REVIEW_CONFIDENCE` | `0.8` | Below this overall confidence an invoice is flagged for review |
 | `TESSERACT_CMD` | `C:\Program Files\Tesseract-OCR\tesseract.exe` | Path to Tesseract |
@@ -540,7 +551,8 @@ Set these as environment variables (PowerShell: `$env:NAME="value"`):
 | `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | Any sentence-transformers model |
 | `DAY_FIRST` | `1` | Fallback for ambiguous dates such as `05/03/2024` when the invoice gives no clue (see below) |
 | `OCR_TEXT_PX` | `18` | Pages are scaled so letters are about this many pixels tall before OCR |
-| `FAST_PHOTO_OCR` | `1` | `0` reads phone photos with Tesseract instead of the fast neural OCR |
+| `FAST_PHOTO_OCR` | `1` | `0` reads photos and scans with Tesseract instead of the fast neural OCR |
+| `HANDWRITING_OCR` | `1` | `0` turns off the second, larger model for pages written by hand |
 | `PHOTO_OCR_THREADS` | all cores (`1` in the Docker image) | CPU threads for the phone-photo OCR |
 | `MAX_UPLOAD_MB` | `300` | Browser upload limit per request (use the folder import for more) |
 | `FLASK_SECRET_KEY` | random, in `data/secret_key` | Session signing key (set it only to share one key between servers) |
@@ -553,15 +565,16 @@ Set these as environment variables (PowerShell: `$env:NAME="value"`):
 app.py                      Web app (pages, exports, JSON API); starts the worker threads
 invoice_parser/
   pipeline.py               InvoiceParser: parse one file -> result dict
-  storage.py                SQLite per workspace: invoices, line items, batches, review, corrections,
+  storage.py                SQLite store: invoices, line items, batches, review, corrections,
                             duplicate detection (SHA-256 file + seller/invoice number)
+  mongo_store.py            the same in MongoDB (used when MONGODB_URI is set), files in GridFS
   worker.py                 background worker threads (queue in the database)
   exporting.py              CSV and Excel exports
   ingest.py                 PDF / image / multi-page TIFF loading, text layer vs OCR
   preprocess.py             page-edge flattening, light flattening, deskew
   ocr.py                    Tesseract wrapper (word boxes + confidence)
   fast_ocr.py               phone-photo OCR: PP-OCRv6 tiny models on ONNX Runtime (RapidOCR)
-  models/                   the two PP-OCRv6 tiny model files (6 MB)
+  models/                   PP-OCRv6 tiny detector + recogniser (6 MB), PP-OCRv6 small recogniser (21 MB, handwriting)
   layout.py                 words -> lines -> cells
   matcher.py                label -> field: exact, fuzzy, embedding (+ label cache)
   schema.py                 canonical fields, synonyms, guard words
@@ -570,6 +583,7 @@ invoice_parser/
   camera.py                 phone (IP Webcam) snapshot and webcam capture
 templates/, static/         Plain HTML, CSS and JS pages
 scripts/import_folder.py          bulk import of a folder (thousands of files)
+scripts/move_to_mongodb.py        copy a PC's SQLite invoices into MongoDB
 scripts/make_sample_invoices.py   synthetic invoices, scans, scanned PDFs, photos + ground truth
 scripts/evaluate.py               accuracy report (per field, input type, layout)
 scripts/convert_katanaml.py       turns the public katanaml dataset into the evaluation format
@@ -602,6 +616,33 @@ Real invoices often leave out the labels a parser would look for. These cases ar
 | No readable line items and no printed subtotal | Subtotal = total - tax, only when the total is confirmed by the amount in words and that subtotal is printed on the invoice |
 
 Tested on 200 invoices in the SuperStore layout (all fields 200/200) and 40 scan / phone-photo versions of them.
+
+## Forms filled in by hand
+
+Many suppliers use printed bill books ('Tax Invoice' forms) and write the buyer, number, date, items and
+amounts in by hand. Such a page is recognised by its many doubtful lines; those lines are read again by a
+larger model (PP-OCRv6 small), which reads handwriting much better ('3805' for '380S', '42288' for '4R88',
+the circled quantity '①' as 1). Then:
+
+| On the form | How it is read |
+|---|---|
+| Amount column split into `Rs.` and `P.` boxes: `42288 \| 14` | One amount, 42288.14 |
+| Rupees and paise with a stroke: `3805=93`, `42288/14` | 3805.93, 42288.14 |
+| A stroke after the figure read as a letter: `49900t`, or `49,900/-` | 49900 |
+| `Total Amount Before Tax`, `Total Amount After Tax`, `TOTAL` above `GRAND TOTAL` | Subtotal, total, subtotal |
+| `Add : CGST @ ...%` | A tax line |
+| `Name :`, `M/s.`, `No.`, `Party GST No.` | Buyer, buyer, invoice number, buyer's GSTIN (`No.` and `Name` only as labels of their own, never the end of `A/c No.` or `Bank Name`) |
+| Value written right of and below its label, date in boxes `11 \| 09 \| 2026` | Read |
+| Amount in words over two lines, between the tax rows on the right | Read as one amount and checked against the total |
+| GSTIN written with an `x` or a round letter read as `0` (`06BMxPS9096032B`) | Repaired with the GSTIN check digit: 06BMXPS9096Q3ZB |
+| Words written without a space (`DEEPAKSHARMA`) | Split where the gap between letters is wide |
+| A grand total in whole rupees within a rupee of subtotal + tax | Round-off, not a misread |
+| The form's printed border on a scan | Not taken for the page edge, so the header (seller, GSTIN) is kept |
+
+Measured on look-alike bill-book forms (dummy data, three handwriting styles, each as a phone photo and as a
+scan): 90 of 100 fields, about 6-7 s per page; the rest were letters the models misread (a written '1' read
+as '7'). Handwriting varies far more than print: check handwritten invoices in the review queue before
+approving them.
 
 ## Limitations
 

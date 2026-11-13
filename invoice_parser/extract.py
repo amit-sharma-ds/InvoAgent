@@ -21,7 +21,7 @@ from rapidfuzz import fuzz
 
 from . import normalize as nz
 from .matcher import Match, normalize_label
-from .schema import PARTY_FIELDS
+from .schema import ALONE_ONLY, PARTY_FIELDS
 
 REQUIRED_FIELDS = ("invoice_number", "invoice_date", "seller", "total")
 
@@ -65,6 +65,11 @@ _COLUMN_ROLES = (
 _NUMERIC_ROLES = ("quantity", "unit_price", "amount", "gross")
 # GST components, also when written as "Output CGST 9%" inside a table row
 _TAX_COMPONENT_RE = re.compile(r"(?i)\b(cgst|sgst|igst|utgst)\b")
+_IN_WORDS_RE = re.compile(r"(?i)\bin\s*words?")
+_LABEL_CELL_RE = re.compile(r"^\s*[A-Za-z][A-Za-z .&/()'-]{1,30}:")  # "State : UP": a label with its value
+# "M/s." / "M/S :" / "Messrs." starting a cell: the buyer's name follows (the letterhead's "M/S YASH
+# TRADERS" has no full stop or colon after M/S, so it is not taken)
+_MESSRS_RE = re.compile(r"(?i)^\s*(?:m\s*/\s*s|messrs)\s*[.:][\s.:_…-]*(.*)$")
 # very short labels that are only trusted with a colon (OCR noise often produces "po", "to" ...)
 _NON_COLON_SKIP = {"po"}
 # "for Deepnap Softech" printed above "Authorised Signatory"
@@ -87,6 +92,8 @@ class Candidate:
 
 def is_table_header(line) -> bool:
     tokens = set(re.findall(r"[a-z]+", line.text.lower()))
+    if re.search(r"\d{3,}", line.text):
+        return False  # "Total Amount Before Tax 42288": a labelled amount, column titles hold no figures
     return bool(tokens & _TABLE_STRONG) and len(tokens & _TABLE_WORDS) >= 3
 
 
@@ -154,6 +161,8 @@ def _choose_label(words, matcher):
     for k in range(min(4, len(words)), 0, -1):
         cand = " ".join(words[-k:])
         mt = matcher.match(cand, semantic=False)
+        if mt and k < len(words) and normalize_label(cand) in ALONE_ONLY:
+            continue  # "A/c No.", "Bank Name": not the invoice number / the buyer
         if mt:
             return cand, " ".join(words[:-k]), mt
     full = " ".join(words)
@@ -193,13 +202,29 @@ def collect_candidates(lines, matcher, skip_lines=()):
             continue
         cells = ln.cells()
         for k, cell in enumerate(cells):
+            if _IN_WORDS_RE.search(cell):
+                continue  # "Total Amount in words ...": read by _amount_in_words, never a figure's label
             nxt = cells[k + 1] if k + 1 < len(cells) else ""
             # the value may sit in the next column, unless that column is itself a label
-            next_value = "" if (not nxt or _starts_with_label(nxt, matcher)) else nxt
+            # ("Invoice No. | State : UP / State Code : 09": the 09 is the state code's)
+            next_value = "" if (not nxt or _starts_with_label(nxt, matcher) or _LABEL_CELL_RE.match(nxt)) else nxt
+            ms = _MESSRS_RE.match(cell)
+            if ms:  # "M/s. ...... DEEPAK SHARMA": the party billed (a bill book's buyer line)
+                value = ms.group(1).strip(" ._:-…") or next_value
+                add(Match("buyer", 1.0, "exact", "m s"), "M/s.", value, ln, k, True)
+                continue
             if ":" in cell:
+                found = False
                 for label, value, mt in split_segments(cell, matcher):
                     if mt is not None:
                         add(mt, label, value or next_value, ln, k, True)
+                        found = True
+                component = None if found else _TAX_COMPONENT_RE.search(cell)
+                if component and "gstin" not in cell.lower():
+                    # "Add : CGST @ 9 %  3,805.93" (bill books): the tax line, its amount ends the row
+                    value = " ".join([cell[component.end():]] + cells[k + 1:]).strip()
+                    add(Match("tax", 1.0, "exact", component.group(1).lower()), component.group(1).upper(),
+                        value, ln, k, False, 0.9)
             else:
                 words = cell.split()
                 for n in range(min(4, len(words)), 0, -1):
@@ -211,6 +236,9 @@ def collect_candidates(lines, matcher, skip_lines=()):
                         r"(?i)\s*(to|from)\s*:?\s*", cell)
                     if mt and normalize_label(label) in _NON_COLON_SKIP:
                         mt = None
+                    if mt and normalize_label(label) == "no" and not re.match(r"[\s.:#_-]*(\d|$)",
+                                                                             " ".join(words[n:])):
+                        mt = None  # "No." is a label when a number (or nothing) follows, not "No. of boxes"
                     if mt and mt.method == "exact" and not weak:  # label-only text must match exactly
                         rest = " ".join(words[n:])
                         if re.fullmatch(r"\(.*\)", rest):  # "Buyer (Bill to)": the brackets belong to the label
@@ -342,42 +370,69 @@ def _amount_same_row(c, lines, label_lines=frozenset()):
     return best[1] if best else None
 
 
-def _value_below(lines, c, label_cells, max_lines=4):
-    """Boxed layouts (Tally and most Indian GST invoices): the value is printed under its label,
-    in the same column. Returns the first non-label cell below that overlaps the label."""
+def _values_below(lines, c, label_cells, max_lines=4):
+    """Texts that may be the value of a label without one, best first.
+
+    Boxed layouts (Tally and most Indian GST invoices) print the value under its label, in the same
+    column: the first non-label cell below that overlaps the label. On a bill book the value is
+    written by hand after the label and a little lower ("Invoice No." with "14" beside and below
+    it, "Date" with "9-9-2026" right of it, under a neighbour's printed line): the cells below that
+    start just right of the label come next."""
     row = lines[c.line_idx]
     if c.cell_idx >= len(row.cell_boxes):
-        return None
+        return []
     label_cell = row.cell_boxes[c.cell_idx]
+    out = []
     for ln in lines[c.line_idx + 1: c.line_idx + 1 + max_lines]:
         if ln.page != c.page:
             break
+        cells = [(k, cell) for k, cell in enumerate(ln.cell_boxes) if _overlap(cell, label_cell) > 0]
+        if any((ln.index, k) in label_cells for k, _ in cells):
+            break  # the next label in this column: the value is empty
+        texts = [cell.text.strip(" |_[](){}:") for _, cell in cells]
+        if any(texts):
+            out.append(next(t for t in texts if t))
+            break
+    for ln in lines[c.line_idx + 1: c.line_idx + 3]:
+        if ln.page != c.page:
+            break
         for k, cell in enumerate(ln.cell_boxes):
-            if _overlap(cell, label_cell) <= 0:
-                continue
-            if (ln.index, k) in label_cells:
-                return None  # the next label in this column: the value is empty
-            text = cell.text.strip(" |_[](){}:")
-            if text:
-                return text
-    return None
+            if (ln.index, k) not in label_cells and label_cell.x1 - 0.02 <= cell.x0 <= label_cell.x1 + 0.12:
+                text = cell.text.strip(" |_[](){}:.")
+                if text and text not in out:
+                    out.append(text)
+    return out
 
 
 def _resolve(c, lines, label_lines, kind, day_first=None, label_cells=frozenset()):
-    text, penalty = c.value, 1.0
-    if not text:  # value sits under the label (same column) or on the next line
-        below = _value_below(lines, c, label_cells)
-        if below:
-            text, penalty = below, 0.95
-        else:
-            nxt = _next_line(lines, label_lines, c.line_idx, c.page)
-            if nxt is None:
-                return None, 1.0
-            text, penalty = nxt.text, 0.9
+    if c.value:
+        sources = [(c.value, 1.0)]
+    else:  # the value sits under the label (same column), just right of it lower down, or on the next line
+        sources = [(text, 0.95) for text in _values_below(lines, c, label_cells)]
+        nxt = _next_line(lines, label_lines, c.line_idx, c.page)
+        if nxt is not None:
+            sources.append((nxt.text, 0.9))
+        if kind not in ("ident", "date", "amount"):
+            sources = sources[:1]  # free text: the first place only
+    for n, (text, penalty) in enumerate(sources):
+        value, penalty = _parse_value(c, lines, label_lines, kind, day_first, text, penalty,
+                                      last=n == len(sources) - 1)
+        if value is not None:
+            return value, penalty
+    if kind == "amount" and not sources:
+        value = _amount_same_row(c, lines, label_lines)
+        return value, (0.9 if value is not None else 1.0)
+    return None, 1.0
+
+
+def _parse_value(c, lines, label_lines, kind, day_first, text, penalty, last=True):
     if kind == "ident":
         value = _first_identifier(text)
     elif kind == "date":
         value = nz.find_date(text, day_first)
+        if value is None:  # written in boxes or with strokes: "11 | 09 | 2026", "10 9 26"
+            joined = re.sub(r"\b(\d{1,2})\s*[|/ ]\s*(\d{1,2})\s*[|/ ]\s*((?:19|20)?\d{2})\b", r"\1/\2/\3", text)
+            value = nz.find_date(joined, day_first) if joined != text else None
     elif kind == "amount":
         text = _QTY_UNIT_RE.sub(" ", text)  # "Total | 1 NOS | 2,95,000.00": the quantity is not money
         text = _PHONE_NUMBER_RE.sub(" ", text)  # "Tax Invoice  Mob.:8535000042": a phone number is not money
@@ -385,6 +440,12 @@ def _resolve(c, lines, label_lines, kind, day_first=None, label_cells=frozenset(
         if value is None:
             value = _last_amount(text)
         if value is None:
+            # a handwritten stroke after the figure read as a letter ('49900t'), or '/-' ('49,900/-')
+            trimmed = re.sub(r"(?<=\d)(?:[A-Za-z]{1,2}\b|/-)", " ", text)
+            if trimmed != text:
+                value = _cell_number(trimmed)
+                value = _last_amount(trimmed) if value is None else value
+        if value is None and last:
             value, penalty = _amount_same_row(c, lines, label_lines), 0.9
     else:
         value = text.strip() or None
@@ -411,6 +472,21 @@ def _scalar(cands, field, lines, label_lines, kind, prefer_last=False, day_first
         value, penalty = _resolve(c, lines, label_lines, kind, day_first, label_cells)
         if value is not None:
             return _pack(value, c, penalty)
+    return None
+
+
+def _total_above_grand_total(cands, lines, label_lines, label_cells, total):
+    """'TOTAL 13902.1 | CGST 1251.1 | SGST 1251.1 | GRAND TOTAL 16405' (bill books): with a grand total
+    further down, a plain 'Total' above it is the taxable value, i.e. the subtotal."""
+    grand = [c.line_idx for c in cands if c.field == "total" and normalize_label(c.label).startswith("grand total")]
+    if not grand:
+        return None
+    plain = sorted((c for c in cands if c.field == "total" and normalize_label(c.label) == "total"
+                    and c.line_idx < max(grand)), key=lambda c: c.line_idx)
+    for c in plain:
+        value, penalty = _resolve(c, lines, label_lines, "amount", label_cells=label_cells)
+        if value is not None and 0 < value < total:
+            return {**_pack(value, c, penalty), "source_label": f"{c.label} (above Grand Total)"}
     return None
 
 
@@ -458,7 +534,7 @@ def parse_party(block):
         if s:
             address.append(s)
     return {
-        "name": name.strip(" ,;|:-_~/\\") or None,
+        "name": re.sub(r"\s+", " ", name).strip(" ,;|:-_~/\\") or None,
         "address": ", ".join(address) or None,
         "tax_id": nz.find_tax_id(text),
         "email": nz.find_email(text),
@@ -518,6 +594,8 @@ def _party(cands, field, lines, label_cells, label_lines):
         if not block:
             continue
         value = parse_party(block)
+        if value["name"] and not value["tax_id"]:
+            value["tax_id"] = _gstin_below(lines, c, column)
         if value["name"]:
             penalty = 1.0 if c.value else 0.95
             return {
@@ -527,6 +605,21 @@ def _party(cands, field, lines, label_cells, label_lines):
                 "source_text": c.line_text,
                 "page": c.page + 1,
             }
+    return None
+
+
+def _gstin_below(lines, c, column, max_lines=6):
+    """A party's GSTIN a few rows under its name, in the party's column. Bill books write each detail
+    on its own dotted row ('Name : ...', 'Address : ...', 'GSTIN : ...'), and the space between the
+    rows ends the party block before the GSTIN row."""
+    for ln in lines[c.line_idx + 1: c.line_idx + 1 + max_lines]:
+        if ln.page != c.page or is_table_header(ln):
+            break
+        picked = _cells_in_column(ln, *column) if column and ln.cell_boxes else range(min(1, len(ln.cell_boxes)))
+        for j in picked:
+            gstin = nz.find_gstin(ln.cell_boxes[j].text)
+            if gstin:
+                return gstin
     return None
 
 
@@ -576,6 +669,8 @@ def _column_block(lines, start, anchor, label_cells, max_lines=8):
         cells = [(k, c) for k, c in enumerate(ln.cell_boxes) if c.x1 > anchor.x0 - 0.02 and c.x0 < right_edge]
         if any((ln.index, k) in label_cells for k, _ in cells):
             break
+        if any((ln.index, k) in label_cells and c.x1 <= anchor.x0 for k, c in enumerate(ln.cell_boxes)):
+            break  # a label left of the name ('No.', 'Invoice No.'): the form below the letterhead begins
         text = " ".join(c.text for _, c in cells).strip(" |_")
         if text:
             out.append(text)
@@ -624,11 +719,58 @@ def _seller_from_signature(lines, label_cells):
     return None
 
 
+_WORDS_CELL_RE = re.compile(r"[A-Za-z][A-Za-z ,.\-]*")
+_NOT_NUMBER_WORDS_RE = re.compile(r"(?i)\b(total|tax|add|round|grand|cgst|sgst|igst|utgst|bank|ifsc|amount|"
+                                  r"before|after|net|less|discount|freight)\b")
+
+
+def _words_after_label(lines, i):
+    """The amount in words written after 'Total Amount in words' / 'Rupees (in words)' on a bill book:
+    the rest of the label's cell and the word-only cells after it, then the leading word-only cells of
+    the next two lines ('Seven thousand' / 'eighty only'), stopping at the neighbour column's label
+    ('Add : CGST @ ...%'). Returns the texts joined line by line: ['Seven thousand', 'Seven thousand
+    eighty only']."""
+    pieces, label_right = [], None
+    for n, ln in enumerate(lines[i: i + 5]):
+        if ln.page != lines[i].page:
+            break
+        cells = [c.text for c in ln.cell_boxes]
+        if n == 0:
+            k = next((k for k, t in enumerate(cells) if _IN_WORDS_RE.search(t)), None)
+            if k is None:
+                return []
+            label_right = ln.cell_boxes[k].x1
+            rest = cells[k][_IN_WORDS_RE.search(cells[k]).end():].lstrip(" .:)-_…")
+            cells = ([rest] if rest else []) + cells[k + 1:]
+        elif ln.cell_boxes[0].x0 >= label_right:
+            continue  # a row of the column on the right (the tax rows): the words go on below it
+        elif not _WORDS_CELL_RE.fullmatch(cells[0].strip(" .:_…")) or _NOT_NUMBER_WORDS_RE.search(cells[0]):
+            break  # the next printed item on the left ('Bank Name : ...')
+        line_words = []
+        for text in cells:
+            text = text.strip(" .:_…")
+            if not text or not _WORDS_CELL_RE.fullmatch(text) or _NOT_NUMBER_WORDS_RE.search(text):
+                break  # the neighbour column's label ('Total Amount Before Tax', 'Add : CGST')
+            line_words.append(text)
+        pieces.append(" ".join(line_words))
+    out, joined = [], ""
+    for piece in pieces:
+        if piece:
+            joined = f"{joined} {piece}".strip()
+            out.append(joined)
+    return out
+
+
 def _amount_in_words(lines):
     """'INR Two Lakh Ninety Five Thousand Only' -> (295000.0, line). Indian invoices always print
     the total in words, and words survive OCR better than long numbers."""
     for i, ln in enumerate(lines):
-        if re.search(r"(?i)in\s+words", ln.text):
+        if re.search(r"(?i)in\s*words", ln.text):
+            # longest reading first: 'Seven thousand eighty only', not 'Seven thousand' alone
+            for text in reversed(_words_after_label(lines, i)):
+                value = nz.words_to_amount(text)
+                if value:
+                    return value, ln
             texts = [ln.text.split(":", 1)[1] if ":" in ln.text else ""] + [x.text for x in lines[i + 1: i + 3]]
         elif re.search(r"(?i)\bonly\b", ln.text) and re.search(r"(?i)\b(rupees?|inr|usd|dollars?|euros?|pounds?)\b",
                                                                ln.text):
@@ -668,6 +810,56 @@ def _seller_from_tax_id(lines, skip=None):
             if value["name"]:
                 return {"value": value, "confidence": round(0.6 * ln.conf, 3),
                         "source_label": "(block with the first GSTIN)", "source_text": cell.text,
+                        "page": ln.page + 1}
+            return None
+    return None
+
+
+def _header_gstin(lines, seller_name, skip=None):
+    """The GSTIN printed in the header around an inferred seller's name (bill books print
+    'GSTIN : 09DFIPA7756B1ZH' above or beside the firm's name): on page 1, at most two lines below
+    the name, in the top third of the page. The buyer's GSTIN (skip) is passed over."""
+    name = re.sub(r"\s+", " ", seller_name or "").lower()
+    seller_at = next((ln.index for ln in lines[:12] if ln.page == 0 and len(name) >= 3
+                      and fuzz.partial_ratio(name, re.sub(r"\s+", " ", ln.text).lower()) >= 85), None)
+    if seller_at is None:
+        return None
+    for ln in lines[: seller_at + 3]:
+        if ln.page != 0 or ln.y0 > 0.35:
+            break
+        for cell in ln.cell_boxes:
+            gstin = nz.find_gstin(cell.text)
+            if gstin and gstin != skip:
+                return gstin
+    return None
+
+
+_BLOCK_STOP_RE = re.compile(r"(?i)\b(no|date|dated|invoice|bill|state|code|gstin|mob|mobile|phone|tel|email)\b")
+
+
+def _buyer_from_tax_id(lines, seller_tax_id):
+    """No buyer label could be read (a bill book's 'M/s' printed small, or cut off by the photo): the
+    first GSTIN on page 1 that is not the seller's belongs to the buyer, with the lines written above
+    it in the same column (name, address) up to the first printed label ('No.', 'Date', ...)."""
+    for i, ln in enumerate(lines[:40]):
+        if ln.page != 0 or is_table_header(ln):
+            break  # the parties are named above the item table
+        for cell in ln.cell_boxes:
+            gstin = nz.find_gstin(cell.text)
+            if not gstin or gstin == seller_tax_id:
+                continue
+            block, column = [cell.text], (cell.x0 - 0.05, cell.x1)
+            for above in reversed(lines[max(0, i - 5): i]):
+                texts = [c.text for c in above.cell_boxes if c.x1 > column[0] and c.x0 < column[1]]
+                text = " ".join(texts).strip(" |_:")
+                if not text or _BLOCK_STOP_RE.search(text) or nz.find_gstin(text):
+                    break
+                block.insert(0, text)
+            value = parse_party(block)
+            if len(block) > 1 and _looks_like_name(value.get("name")):
+                value["tax_id"] = gstin
+                return {"value": value, "confidence": round(0.5 * ln.conf, 3),
+                        "source_label": "(block with the second GSTIN)", "source_text": cell.text,
                         "page": ln.page + 1}
             return None
     return None
@@ -914,7 +1106,9 @@ def _reconcile_amounts(fields, items, words_total, warnings, figures=frozenset()
     tax = fields.get("tax")
     comps = (tax or {}).get("components") or {}
     if (tot is not None and base is not None and "CGST" in comps and "SGST" in comps
-            and abs(comps["CGST"] - comps["SGST"]) > 0.05 and _one_digit_apart(comps["CGST"], comps["SGST"])):
+            and abs(comps["CGST"] - comps["SGST"]) > 0.05
+            and (_one_digit_apart(comps["CGST"], comps["SGST"])
+                 or int(comps["CGST"]) == int(comps["SGST"]))):  # handwritten paise not read: 3805 / 3805.93
         # CGST and SGST are always equal; the one that matches total - taxable value is the right one
         expected = round(tot - base - ship + disc, 2)
         right = next((k for k in ("CGST", "SGST") if abs(2 * comps[k] - expected) <= 0.05), None)
@@ -928,7 +1122,10 @@ def _reconcile_amounts(fields, items, words_total, warnings, figures=frozenset()
                             f"must be equal, and total - taxable value = {expected:,.2f}. Please check.")
     elif tax and tot is not None and base is not None and (total_confirmed or subtotal_confirmed):
         expected = round(tot - base - ship + disc, 2)
-        if expected > 0 and abs(tax["value"] - expected) > 0.05 and _one_digit_apart(tax["value"], expected):
+        # a grand total in whole rupees within a rupee of subtotal + tax was rounded off, not misread
+        rounded = abs(tot - round(tot)) < 0.005 and abs(tax["value"] - expected) < 1
+        if (expected > 0 and abs(tax["value"] - expected) > 0.05 and not rounded
+                and _one_digit_apart(tax["value"], expected)):
             _correct(tax, expected, "total - subtotal gives this tax", warnings, "Tax")
 
     tax_value = _amount_of(fields, "tax")
@@ -987,6 +1184,9 @@ def extract_invoice(lines, matcher):
         "total": _scalar(cands, "total", lines, label_lines, "amount", prefer_last=True, label_cells=cells),
     }
 
+    if fields["subtotal"] is None and fields["total"] is not None:
+        fields["subtotal"] = _total_above_grand_total(cands, lines, label_lines, cells, fields["total"]["value"])
+
     words_total, words_line = _amount_in_words(lines)
     if fields["total"] is None and words_total:
         fields["total"] = {"value": words_total, "confidence": round(0.85 * words_line.conf, 3),
@@ -1003,8 +1203,17 @@ def extract_invoice(lines, matcher):
                 inferred = found
                 break
         if inferred:
+            if not inferred["value"].get("tax_id"):
+                inferred["value"]["tax_id"] = _header_gstin(lines, inferred["value"].get("name"), skip=buyer_tax_id)
             fields["seller"] = inferred
             warnings.append("Seller was inferred (no 'Seller/Vendor' label): please check it.")
+
+    seller_tax_id = ((fields["seller"] or {}).get("value") or {}).get("tax_id")
+    if fields["buyer"] is None and seller_tax_id:
+        found = _buyer_from_tax_id(lines, seller_tax_id)
+        if found:
+            fields["buyer"] = found
+            warnings.append("Buyer was inferred (no 'Buyer / Bill to' label): please check it.")
 
     currency = _scalar(cands, "currency", lines, label_lines, "text")
     if currency and currency["value"]:

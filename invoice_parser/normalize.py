@@ -27,7 +27,7 @@ DATE_PATTERNS = [
 GSTIN_RE = re.compile(r"\b\d{2}[A-Z]{5}\d{4}[A-Z][A-Z\d]Z[A-Z\d]\b")
 LABELLED_TAX_RE = re.compile(
     r"(?i)\b(?:GSTIN|GST\s*(?:No|Number|ID)|VAT\s*(?:No|Reg(?:istration)?|ID|Number)?|"
-    r"Tax\s*(?:ID|No|Number)|TIN|EIN|PAN|ABN|UEN|Reg(?:istration)?\s*No)\.?\s*[:#-]?\s*"
+    r"Tax\s*(?:[Il1]d|No|Number)|TIN|EIN|PAN|ABN|UEN|Reg(?:istration)?\s*No)\.?\s*[:#-]?\s*"  # 'Tax ld': OCR's l for I
     r"([A-Z0-9][A-Z0-9/-]{4,24})"
 )
 EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
@@ -176,11 +176,17 @@ def find_gstin(text):
     for token in tokens:
         fixed = "".join(ch.translate(_TO_DIGIT) if kind == "D" else ch.translate(_TO_LETTER) if kind == "L"
                         else "Z" if kind == "Z" else ch for ch, kind in zip(token, _GSTIN_KINDS))
-        # the check character may itself be misread (8/B, 0/O ...): try its look-alikes
-        for last in dict.fromkeys(fixed[14] + _LOOK_ALIKES.get(fixed[14], "")):
-            candidate = fixed[:14] + last
-            if GSTIN_RE.fullmatch(candidate) and gstin_checksum_ok(candidate):
-                return candidate
+        # a round letter written by hand reads as 0: it may be O, Q or D (the checksum decides)
+        rounds = [i for i, (ch, kind) in enumerate(zip(token, _GSTIN_KINDS)) if kind == "L" and ch == "0"][:3]
+        variants = [fixed]
+        for i in rounds:
+            variants = [v[:i] + letter + v[i + 1:] for v in variants for letter in "OQD"]
+        for variant in variants:
+            # the check character may itself be misread (8/B, 0/O ...): try its look-alikes
+            for last in dict.fromkeys(variant[14] + _LOOK_ALIKES.get(variant[14], "")):
+                candidate = variant[:14] + last
+                if GSTIN_RE.fullmatch(candidate) and gstin_checksum_ok(candidate):
+                    return candidate
     return None
 
 

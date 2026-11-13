@@ -14,6 +14,7 @@ pytesseract>=0.3.10
 # Fast OCR for phone photos: PaddleOCR PP-OCRv6 tiny models (in invoice_parser/models) on ONNX Runtime
 rapidocr==3.10.0
 onnxruntime>=1.20
+pymongo==4.15.3
 
 # Field matching / normalisation
 rapidfuzz>=3.6          # fuzzy string matching for label synonyms

@@ -23,7 +23,7 @@ sys.path.insert(0, str(ROOT))
 from invoice_parser import config  # noqa: E402
 from invoice_parser.exporting import build_xlsx, to_csv  # noqa: E402
 from invoice_parser.pipeline import get_parser  # noqa: E402
-from invoice_parser.storage import EXPORT_COLUMNS, ITEM_COLUMNS, InvoiceStore  # noqa: E402
+from invoice_parser.storage import EXPORT_COLUMNS, ITEM_COLUMNS, open_store  # noqa: E402
 from invoice_parser.worker import BatchWorker  # noqa: E402
 
 ALLOWED = config.PDF_EXTENSIONS | config.IMAGE_EXTENSIONS
@@ -66,8 +66,6 @@ def main():
     ap.add_argument("folder", help="folder with invoices (searched recursively)")
     ap.add_argument("--workers", type=int, default=config.WORKERS,
                     help=f"parallel worker threads (default {config.WORKERS})")
-    ap.add_argument("--workspace", choices=config.WORKSPACES, default="live",
-                    help="live = company invoices (default), demo = sample invoices")
     ap.add_argument("--batch-name", help="name shown in the web app (default: folder name)")
     ap.add_argument("--export", help="write the results to this .xlsx or .csv file when finished")
     args = ap.parse_args()
@@ -76,7 +74,7 @@ def main():
     if not folder.is_dir():
         sys.exit(f"Folder not found: {folder}")
 
-    store = InvoiceStore.for_workspace(args.workspace)
+    store = open_store()  # MongoDB when configured, else SQLite in data/live
     batch_id = store.create_batch(args.batch_name or folder.name, source=str(folder.resolve()))
     new = old = 0
     for name, data in iter_files(folder):
@@ -115,6 +113,9 @@ def main():
           f"{s['queued'] + s['processing']} still waiting.")
     if args.export:
         export(store, batch_id, Path(args.export))
+    if hasattr(store, "wait_for_uploads"):  # MongoDB: the original files finish uploading first
+        print("Storing the original files in MongoDB...")
+        store.wait_for_uploads()
 
 
 if __name__ == "__main__":

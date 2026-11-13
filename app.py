@@ -1,9 +1,9 @@
 """Flask web app for the invoice parser.
 
 Sidebar tabs: Overview, Upload, Invoices, Review queue, Data sheet, Vendors, Phone camera.
-Two workspaces with separate data: Live (the company's real invoices, starts empty) and
-Demo (sample invoices for showing the app). The choice is remembered per browser.
-JSON API: POST /api/parse, GET /api/invoices, GET /api/batches/<id>, GET /health (Live workspace).
+Data: MongoDB when MONGODB_URI is set (shared by every computer and the server), else SQLite in
+data/live (see config.py).
+JSON API: POST /api/parse, GET /api/invoices, GET /api/batches/<id>, GET /health.
 
 Run:  python app.py
   This PC:            http://localhost:5077
@@ -34,7 +34,7 @@ from invoice_parser.camera import (DROIDCAM_PORTS, CameraError, PhoneStream, dro
 from invoice_parser.exporting import build_xlsx, to_csv
 from invoice_parser.pipeline import get_parser
 from invoice_parser.storage import (EDITABLE_FIELDS, EXPORT_COLUMNS, ITEM_COLUMNS, REVIEW_STATUSES, STATUSES,
-                                    TABLE_COLUMNS, InvoiceStore, move_legacy_data_to_demo)
+                                    TABLE_COLUMNS, move_legacy_data_to_demo, open_store)
 from invoice_parser.worker import BatchWorker
 
 log = logging.getLogger(__name__)
@@ -57,7 +57,6 @@ MAX_ZIP_TOTAL = 2 * 1024 * 1024 * 1024   # stop unpacking after 2 GB (ZIP-bomb g
 PAGE_SIZE = 50
 SHEET_ROW_LIMIT = 5000  # rows shown in the browser; the Excel / CSV downloads always have everything
 MONEY_COLUMNS = {"subtotal", "tax", "discount", "shipping", "total"}
-SAMPLES_DIR = config.PROJECT_ROOT / "data" / "samples"
 EDIT_LABELS = [("invoice_number", "Invoice number"), ("invoice_date", "Invoice date"), ("due_date", "Due date"),
                ("po_number", "PO number"), ("currency", "Currency"), ("seller_name", "Seller name"),
                ("seller_tax_id", "Seller GSTIN / tax ID"), ("buyer_name", "Buyer name"),
@@ -70,15 +69,14 @@ try:  # older versions kept all data in data/invoices.db: that becomes the Demo 
 except OSError as exc:
     log.warning("Could not move the earlier data to the Demo workspace: %s", exc)
 
-stores = {name: InvoiceStore.for_workspace(name) for name in config.WORKSPACES}
-workers = {"live": BatchWorker(stores["live"]), "demo": BatchWorker(stores["demo"], workers=1)}
+stores = {"live": open_store()}
+workers = {"live": BatchWorker(stores["live"])}
 phone = PhoneStream()  # one shared connection to a phone camera app (DroidCam / IP Webcam)
 
 
 # --- workspace and helpers ---------------------------------------------------------------
 def workspace():
-    name = session.get("workspace", "live")
-    return name if name in stores else "live"
+    return "live"  # the only workspace (the Demo workspace was removed)
 
 
 def store():
@@ -238,25 +236,12 @@ def _expand_uploads(uploads):
     return files, skipped
 
 
-def _store_and_process(name, data, target=None):
-    """Save one file in the current workspace and parse it right away. Returns (invoice_id, is_new)."""
-    target_store = target or store()
-    target_worker = workers["live"] if target_store is stores["live"] else workers["demo"]
-    invoice_id, is_new = target_store.add_file(name, data, queue=False)
+def _store_and_process(name, data):
+    """Save one file and parse it right away. Returns (invoice_id, is_new)."""
+    invoice_id, is_new = store().add_file(name, data, queue=False)
     if is_new:
-        target_worker.process_now(invoice_id)
+        worker().process_now(invoice_id)
     return invoice_id, is_new
-
-
-# --- workspace switch -----------------------------------------------------------------------
-@app.post("/workspace/<name>")
-def switch_workspace(name):
-    if name not in stores:
-        abort(404)
-    session["workspace"] = name
-    session.pop("back_url", None)  # the other workspace's lists are not "back"
-    flash("Switched to Live: your company's invoices." if name == "live" else "Switched to Demo.")
-    return redirect(url_for("index"))
 
 
 # --- pages -------------------------------------------------------------------------------
@@ -267,11 +252,7 @@ def index():
 
 @app.get("/upload")
 def upload_page():
-    samples = []
-    if workspace() == "demo" and SAMPLES_DIR.is_dir():
-        samples = sorted(p.name for p in SAMPLES_DIR.iterdir()
-                         if p.suffix.lower() in ALLOWED_EXTENSIONS and not p.name.startswith("_"))
-    return render_template("upload.html", samples=samples, batches=store().list_batches(limit=5))
+    return render_template("upload.html", batches=store().list_batches(limit=5))
 
 
 @app.post("/upload")
@@ -381,7 +362,11 @@ def invoice_file(invoice_id):
     row = store().get(invoice_id)
     if row is None:
         abort(404)
-    return send_file(store().file_path(row), download_name=row["file_name"])
+    path = store().file_path(row)
+    if not path.exists():
+        return _back_to("invoice_detail", "The original file is not available (the database had no space "
+                        "left for it); the invoice data is saved.", invoice_id=invoice_id)
+    return send_file(path, download_name=row["file_name"])
 
 
 @app.post("/invoices/<int:invoice_id>/reprocess")
@@ -462,17 +447,6 @@ def batch_detail(batch_id):
         abort(404)
     _, rows = store().search(batch_id=batch_id, limit=1000)
     return render_template("batch.html", batch=summary, rows=rows, money_columns=MONEY_COLUMNS)
-
-
-@app.get("/sample/<name>")
-def parse_sample(name):
-    if workspace() != "demo":
-        return _back_to("upload_page", "Sample invoices are only used in the Demo workspace.")
-    path = SAMPLES_DIR / Path(name).name
-    if path.suffix.lower() not in ALLOWED_EXTENSIONS or not path.is_file():
-        return _back_to("upload_page", "Unknown sample file.")
-    invoice_id, _ = _store_and_process(path.name, path.read_bytes())
-    return redirect(url_for("invoice_detail", invoice_id=invoice_id))
 
 
 # --- cameras -------------------------------------------------------------------------------
@@ -593,7 +567,7 @@ def export_invoices_xlsx():
                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 
-# --- JSON API (Live workspace unless the browser chose Demo) ---------------------------------
+# --- JSON API ----------------------------------------------------------------------------------
 @app.post("/api/parse")
 def api_parse():
     """POST a multipart form with field 'file'. The invoice is saved and returned as JSON."""
@@ -662,6 +636,8 @@ def start_background_work():
     auth.bootstrap_admin_from_env()  # servers: first user from INVOICE_ADMIN_USER / INVOICE_ADMIN_PASSWORD
     for w in workers.values():
         w.start()
+    if hasattr(stores["live"], "resume_uploads"):  # MongoDB: files of this computer not stored there yet
+        threading.Thread(target=stores["live"].resume_uploads, daemon=True).start()
     threading.Thread(target=lambda: get_parser().matcher.warm_up(), daemon=True).start()
     threading.Thread(target=fast_ocr.warm_up, daemon=True).start()  # phone-photo OCR models
 
@@ -674,7 +650,8 @@ if __name__ == "__main__":
     print("InvoAgent running.")
     print(f"  This PC:            http://localhost:{PORT}")
     print(f"  Phone (same Wi-Fi): http://<this-PC-IP>:{PORT}")
-    print(f"  Data:               {config.DATA_DIR} (live / demo workspaces)")
+    print(f"  Data:               " + (f"MongoDB database '{config.MONGODB_DB}'" if config.MONGODB_URI
+                                       else f"{config.DATA_DIR / 'live'} (SQLite)"))
     print(f"  Worker threads:     {workers['live'].workers}")
     from waitress import serve  # production-grade WSGI server (works on Windows)
 

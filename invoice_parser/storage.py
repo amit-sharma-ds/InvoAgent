@@ -126,6 +126,64 @@ EDITABLE_FIELDS = {
     "shipping": ("amount", ("shipping",)), "total": ("amount", ("total",)),
 }
 REVIEW_STATUSES = ("pending", "approved", "rejected")
+# Every column of the invoices table (the MongoDB store keeps the same fields).
+INVOICE_COLUMNS = [
+    "id", "batch_id", "file_name", "file_sha256", "stored_path", "status", "error", "pages", "method",
+    "overall_confidence", "processing_ms", "invoice_number", "invoice_date", "due_date", "po_number", "currency",
+    "seller_name", "seller_address", "seller_tax_id", "seller_email", "seller_phone", "buyer_name",
+    "buyer_address", "buyer_tax_id", "buyer_email", "buyer_phone", "subtotal", "tax", "discount", "shipping",
+    "total", "totals_ok", "line_items_ok", "line_item_count", "needs_review", "warnings", "result_json",
+    "created_at", "started_at", "processed_at", "review_status", "review_note", "reviewed_at", "edited",
+    "duplicate_of", "invoice_key",
+]
+
+
+def open_store():
+    """The invoice store of this installation: MongoDB when MONGODB_URI is set (data shared by every
+    computer and the server, nothing lost on a restart), else SQLite in data/live."""
+    if config.MONGODB_URI:
+        from .mongo_store import MongoInvoiceStore
+
+        return MongoInvoiceStore()
+    return InvoiceStore.for_workspace("live")
+
+
+def corrections(row, values):
+    """A reviewer's corrections to an invoice row -> the columns that change (with edited, the
+    updated parser result and invoice_key), or {} when nothing changes. Raises ValueError for an
+    amount or date that cannot be read."""
+    result = json.loads(row["result_json"]) if row["result_json"] else {}
+    fields = result.setdefault("fields", {})
+    changes = {}
+    for column, (kind, path) in EDITABLE_FIELDS.items():
+        if column not in values:
+            continue
+        raw = (values[column] or "").strip()
+        if kind == "amount":
+            new = nz.parse_amount(raw) if raw else None
+            if raw and new is None:
+                raise ValueError(f"'{raw}' is not an amount.")
+        elif kind == "date":
+            new = nz.parse_date(raw) if raw else None
+            if raw and new is None:
+                raise ValueError(f"Could not read the date '{raw}'. Use for example 2026-09-23.")
+        else:
+            new = raw or None
+        if new == row[column]:
+            continue
+        changes[column] = new
+        corrected = {"confidence": 1.0, "source_label": "corrected by reviewer", "source_text": "", "page": None}
+        if len(path) == 1:
+            fields[path[0]] = {**corrected, "value": new} if new is not None else None
+        else:
+            party = fields.get(path[0]) or {**corrected, "value": {}}
+            party["value"] = {**(party.get("value") or {}), path[1]: new}
+            party.update(confidence=1.0, source_label="corrected by reviewer")
+            fields[path[0]] = party
+    if changes:
+        changes.update(edited=1, result_json=json.dumps(result, ensure_ascii=False),
+                       invoice_key=invoice_key(changes.get("invoice_number", row["invoice_number"])))
+    return changes
 
 
 def invoice_key(number):
@@ -447,38 +505,9 @@ class InvoiceStore:
         row = self.get(invoice_id)
         if row is None:
             return None
-        result = json.loads(row["result_json"]) if row["result_json"] else {}
-        fields = result.setdefault("fields", {})
-        changes = {}
-        for column, (kind, path) in EDITABLE_FIELDS.items():
-            if column not in values:
-                continue
-            raw = (values[column] or "").strip()
-            if kind == "amount":
-                new = nz.parse_amount(raw) if raw else None
-                if raw and new is None:
-                    raise ValueError(f"'{raw}' is not an amount.")
-            elif kind == "date":
-                new = nz.parse_date(raw) if raw else None
-                if raw and new is None:
-                    raise ValueError(f"Could not read the date '{raw}'. Use for example 2026-09-23.")
-            else:
-                new = raw or None
-            if new == row[column]:
-                continue
-            changes[column] = new
-            corrected = {"confidence": 1.0, "source_label": "corrected by reviewer", "source_text": "", "page": None}
-            if len(path) == 1:
-                fields[path[0]] = {**corrected, "value": new} if new is not None else None
-            else:
-                party = fields.get(path[0]) or {**corrected, "value": {}}
-                party["value"] = {**(party.get("value") or {}), path[1]: new}
-                party.update(confidence=1.0, source_label="corrected by reviewer")
-                fields[path[0]] = party
+        changes = corrections(row, values)
         if not changes:
             return row
-        changes.update(edited=1, result_json=json.dumps(result, ensure_ascii=False),
-                       invoice_key=invoice_key(changes.get("invoice_number", row["invoice_number"])))
         cols = list(changes)
         with self._db() as con:
             con.execute(f"UPDATE invoices SET {', '.join(c + ' = ?' for c in cols)} WHERE id = ?",

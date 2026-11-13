@@ -2,7 +2,7 @@
 {% block content %}
 <section class="card">
   <h1>Overview</h1>
-  <p class="muted small">{{ 'Live workspace: your company invoices.' if workspace == 'live' else 'Demo workspace: sample invoices.' }}</p>
+  <p class="muted small">Your company invoices.</p>
   {% if overview.total == 0 %}
     <div class="empty">
       <p><strong>No invoices here yet.</strong> Upload one or two invoices (PDF or photo) to see the result.</p>

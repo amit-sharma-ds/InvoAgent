@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>InvoAgent{% if workspace == 'demo' %} (Demo){% endif %}</title>
+  <title>InvoAgent</title>
   <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='logo.svg') }}">
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
   {% block head %}{% endblock %}
@@ -12,15 +12,6 @@
 <div class="shell">
   <aside class="sidebar">
     <a class="brand" href="{{ url_for('index') }}"><img class="brand-logo" src="{{ url_for('static', filename='logo.svg') }}" alt="" width="28" height="28"> InvoAgent</a>
-
-    <div class="ws-switch" role="group" aria-label="Workspace">
-      {% for name, label in [('live', 'Live'), ('demo', 'Demo')] %}
-        <form method="post" action="{{ url_for('switch_workspace', name=name) }}">
-          <button type="submit" class="{{ name }} {% if workspace == name %}active{% endif %}"
-                  title="{{ 'Your company invoices' if name == 'live' else 'Sample invoices for showing the app' }}">{{ label }}</button>
-        </form>
-      {% endfor %}
-    </div>
 
     <nav class="side-nav">
       {% set tabs = [
@@ -50,17 +41,10 @@
       <span>Signed in as <strong>{{ current_user }}</strong></span>
       <form method="post" action="{{ url_for('logout') }}"><button type="submit">Log out</button></form>
     </div>
-    <p class="side-foot">
-      {% if workspace == 'demo' %}<strong>Demo</strong>: sample invoices, safe to show others.
-      {% else %}<strong>Live</strong>: your company's invoices.{% endif %}
-    </p>
   </aside>
 
   <main class="content">
     <div class="container">
-      {% if workspace == 'demo' %}
-        <div class="demo-banner">Demo workspace: sample invoices for showing the app. Switch to <strong>Live</strong> in the sidebar for real work.</div>
-      {% endif %}
       {% with messages = get_flashed_messages() %}
         {% if messages %}
           <div class="alert">{% for m in messages %}<p>{{ m }}</p>{% endfor %}</div>

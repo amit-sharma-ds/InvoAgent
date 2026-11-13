@@ -11,6 +11,7 @@ FIELD_SYNONYMS = {
         "invoice number", "invoice no", "invoice num", "invoice id", "invoice ref",
         "inv no", "inv number", "bill number", "bill no", "tax invoice no",
         "tax invoice number", "document number", "document no",
+        "no",  # bill books print a bare "No." beside the number (only as a label of its own, see ALONE_ONLY)
     ],
     "invoice_date": [
         "invoice date", "date", "date of invoice", "invoice dated", "dated",
@@ -38,10 +39,12 @@ FIELD_SYNONYMS = {
         "bill to", "billed to", "bill to party", "sold to", "sold to party", "ship to",
         "recipient", "purchaser", "consignee", "customer details", "buyer details",
         "bill to details", "invoice to", "to",
+        "name", "party name", "messrs",  # bill books: "Name : ...", "M/s. ..." (see ALONE_ONLY / extract.py)
     ],
     "subtotal": [
         "subtotal", "sub total", "net amount", "taxable amount", "taxable value",
         "amount before tax", "total before tax", "net total", "total excluding tax",
+        "total amount before tax", "total value before tax",
         "base amount", "net worth", "total net worth", "net value", "total net",
     ],
     "tax": [
@@ -65,6 +68,8 @@ FIELD_SYNONYMS = {
         "final amount", "total invoice amount", "grand total amount",
         "gross worth", "total gross worth", "gross amount", "gross total", "total gross",
         "gross value", "gross",
+        # Indian bill books: "Total Amount After Tax" (an exact phrase, so 'tax' does not rule it out)
+        "total amount after tax", "amount after tax", "total after tax", "grand total after tax",
     ],
     "currency": ["currency", "currency code"],
 }
@@ -77,18 +82,26 @@ FIELD_BLOCKLIST = {
     "due_date": set(),
     "po_number": {"date"},
     "seller": {"to", "ship", "shipping", "deliver", "delivery", "customer", "buyer",
-               "client", "recipient", "consignee", "purchaser"},
+               "client", "recipient", "consignee", "purchaser",
+               "transport", "transporter", "vehicle", "bank", "branch", "account", "holder", "state", "place"},
     "buyer": {"by", "from", "seller", "vendor", "supplier", "issued", "issuer",
-              "merchant", "provider", "payee", "sender"},
-    "subtotal": {"discount", "grand", "payable", "due", "balance", "pay", "gross", "shipping", "freight"},
+              "merchant", "provider", "payee", "sender",
+              # "Transport Name", "Bank Name", "State Name": names of other things, not of the buyer
+              "transport", "transporter", "vehicle", "bank", "branch", "account", "holder", "state", "place"},
+    # "Total Amount in words: ..." is never a figure
+    "subtotal": {"discount", "grand", "payable", "due", "balance", "pay", "gross", "shipping", "freight", "words"},
     # "Tax Id", "VAT No", "GST Number", "Tax rate" are identifiers or percentages, not tax amounts
-    "tax": {"id", "no", "number", "reg", "registration", "identification", "code", "rate"},
-    "discount": set(),
+    "tax": {"id", "no", "number", "reg", "registration", "identification", "code", "rate", "words"},
+    "discount": {"words"},
     "shipping": {"to", "address", "mode", "method", "date", "via", "terms", "from", "no", "number"},
     "total": {"sub", "subtotal", "tax", "vat", "gst", "igst", "cgst", "sgst", "discount", "shipping", "freight",
-              "unit", "rate", "qty", "quantity", "price", "before", "excluding"},
+              "unit", "rate", "qty", "quantity", "price", "before", "excluding", "words"},
     "currency": set(),
 }
+
+# Short labels that are labels only on their own: "No. : 695" and "Name : Deepnap Softech", but not the
+# end of "A/c No. : 3062..." or "Bank Name : Union Bank of India".
+ALONE_ONLY = {"no", "name", "messrs"}
 
 PARTY_FIELDS = {"seller", "buyer"}
 AMOUNT_FIELDS = {"subtotal", "tax", "discount", "shipping", "total"}

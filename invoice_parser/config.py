@@ -12,10 +12,9 @@ def _env_bool(name: str, default: bool) -> bool:
 
 # --- Storage -----------------------------------------------------------------
 DATA_DIR = Path(os.environ.get("INVOICE_DATA_DIR", str(PROJECT_ROOT / "data")))
-# Two workspaces with separate databases and files:
-#   live : the company's real invoices (starts empty)
-#   demo : sample invoices for showing the app to others
-WORKSPACES = ("live", "demo")
+# One workspace, "live": the company's invoices. (An earlier "demo" workspace with sample invoices
+# was removed from the app; its folder data/demo is left untouched on disk.)
+WORKSPACES = ("live",)
 
 
 def workspace_dir(name: str) -> Path:
@@ -25,6 +24,28 @@ def workspace_dir(name: str) -> Path:
 DB_PATH = Path(os.environ.get("INVOICE_DB_PATH", str(workspace_dir("live") / "invoices.db")))
 FILES_DIR = workspace_dir("live") / "files"       # original invoices, stored by SHA-256
 LABEL_CACHE_PATH = DATA_DIR / "label_cache.json"  # remembered label -> field decisions
+
+
+def _mongodb_uri() -> str:
+    uri = os.environ.get("MONGODB_URI", "").strip()
+    if uri:
+        return uri
+    try:  # this PC: the connection string in a file that is never committed (data/*.txt)
+        return (DATA_DIR / "mongodb_uri.txt").read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+
+
+# --- MongoDB (shared database) -----------------------------------------------
+# With a MongoDB connection string, invoices, approvals, corrections and the original files are kept
+# in MongoDB: every computer and the server show the same data and a server restart loses nothing.
+# Set MONGODB_URI (Render: Environment) or put the string in data/mongodb_uri.txt on a PC.
+# Without it the app keeps SQLite in data/live.
+MONGODB_URI = _mongodb_uri()
+MONGODB_DB = os.environ.get("MONGODB_DB", "invoagent")
+# Original files are not stored in MongoDB once the whole cluster would pass this size (MB), so the
+# other databases on a free 512 MB Atlas cluster never run out of space. Invoice data is still saved.
+MONGODB_FILES_LIMIT_MB = int(os.environ.get("MONGODB_FILES_LIMIT_MB", "450"))
 
 # --- Processing --------------------------------------------------------------
 # Parallel worker threads for bulk jobs. Default: CPU cores - 1 (max 8).

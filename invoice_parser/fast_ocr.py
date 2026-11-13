@@ -24,6 +24,9 @@ from .models import Word
 MODEL_DIR = Path(__file__).with_name("models")
 DET_MODEL = MODEL_DIR / "PP-OCRv6_det_tiny.onnx"  # sha256 f42c0fbd294d95eac1a550e131b277dac97462c8025fa4b6c3cec1b7894bd3d5
 REC_MODEL = MODEL_DIR / "PP-OCRv6_rec_tiny.onnx"  # sha256 e16e242de5937ad92609223f19bc2aff3727ee40b095f996907c24749bad251b
+# A larger recogniser of the same family (21 MB) that reads handwriting much better: used only on pages
+# that read poorly (handwritten forms), and only for their doubtful lines.
+HAND_MODEL = MODEL_DIR / "PP-OCRv6_rec_small.onnx"  # sha256 6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884
 
 READ_SIDE = 2000  # longest side of the page the text lines are cut from (recognition quality)
 FIND_SIDE = 1280  # longest side of the copy the text lines are found on (detection time grows with pixels)
@@ -37,9 +40,19 @@ GROUP_SPREAD = 1.3     # a batch takes lines up to this many times as wide as it
 # Share of lines read with 0.9+ confidence under which the page is tried upside down. Upright
 # photos of the test sets: 0.9-1.0; the same photos upside down: 0.1-0.2.
 UPSIDE_DOWN_BELOW = 0.5
+# Handwriting: a page with less than this share of lines read with 0.9+ confidence (printed photos:
+# 0.9-1.0; a printed form filled in by hand: about 0.6) has its lines below REREAD_BELOW read again
+# by the larger model, which keeps the more confident reading of each line.
+HANDWRITING_BELOW = 0.85
+REREAD_BELOW = 0.95
+REREAD_LONG_BELOW = 0.85  # lines longer than REREAD_MAX_RATIO heights are read again only below this
+REREAD_MAX_RATIO = 12
+HAND_TRUST = 0.6  # the larger model's reading wins from this confidence on
+HAND_BATCH = 8  # the larger model's working memory grows with the batch (512 MB servers)
 THREADS = int(os.environ.get("PHOTO_OCR_THREADS", "0"))  # 0 = ONNX Runtime's default (all cores)
 
 _engine = None
+_hand = None
 _engine_lock = threading.Lock()
 _run_lock = threading.Lock()  # one photo at a time: a single read already uses every core
 
@@ -75,25 +88,46 @@ def _get_engine():
                 "EngineConfig.onnxruntime.intra_op_num_threads": THREADS or -1,
             })
             # The library's model wrappers are used (image preparation, decoding, word boxes), with
-            # ONNX Runtime sessions of our own, whose idle threads sleep instead of spinning: on the
-            # dev PC, sharing the CPU with another busy program, that took 20-25% less CPU per photo.
-            engine._load_det_model().session.session = _session(DET_MODEL)
-            engine._load_rec_model().session.session = _session(REC_MODEL)
+            # ONNX Runtime sessions of our own (_Session).
+            engine._load_det_model().session.session = _Session(DET_MODEL)
+            engine._load_rec_model().session.session = _Session(REC_MODEL)
             _engine = engine
         return _engine
 
 
-def _session(model_path):
-    import onnxruntime as ort
+class _Session:
+    """An ONNX Runtime session tuned for a small shared server:
 
-    opts = ort.SessionOptions()
-    opts.log_severity_level = 4
-    opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    opts.enable_cpu_mem_arena = True  # 5-10% faster on the dev PC
-    if THREADS:
-        opts.intra_op_num_threads = THREADS
-    opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
-    return ort.InferenceSession(str(model_path), sess_options=opts, providers=["CPUExecutionProvider"])
+    * its idle threads sleep instead of spinning: on the dev PC, sharing the CPU with another busy
+      program, that took 20-25% less CPU per photo;
+    * it gives its unused working memory back after every run. ONNX Runtime keeps the memory a
+      model needed in a pool for the next run, and with text lines of every size the pool only
+      grew: 140 MB after loading, 500 MB after five photos (peak 570 MB), more than the 512 MB of
+      Render's free instance, which restarted the app. Emptied after each run, the process stays
+      at about 190 MB between photos (peak about 375 MB) at the same speed; switching the pool off
+      instead cost 25-30% more CPU."""
+
+    def __init__(self, model_path):
+        import onnxruntime as ort
+
+        opts = ort.SessionOptions()
+        opts.log_severity_level = 4
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        opts.enable_cpu_mem_arena = True  # 5-10% faster on the dev PC
+        opts.enable_mem_pattern = False   # input sizes change with every photo
+        if THREADS:
+            opts.intra_op_num_threads = THREADS
+        opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
+        self._session = ort.InferenceSession(str(model_path), sess_options=opts,
+                                             providers=["CPUExecutionProvider"])
+        self._run_options = ort.RunOptions()
+        self._run_options.add_run_config_entry("memory.enable_memory_arena_shrinkage", "cpu:0")
+
+    def run(self, output_names, input_feed, run_options=None):
+        return self._session.run(output_names, input_feed, self._run_options)
+
+    def __getattr__(self, name):  # inputs, outputs and metadata of the model
+        return getattr(self._session, name)
 
 
 def warm_up():
@@ -125,12 +159,37 @@ def read_photo(img, page_index: int, check_upside_down: bool = False):
             return [], 0.0
         if check_upside_down and _reads_better_turned(engine, img, boxes):
             img, boxes = _turn_round(engine, img, boxes)
-        words, conf, sure = _read(engine, img, boxes, page_index)
+        crops, read = _read(engine, img, boxes)
+        conf, sure = _confidence(engine, read)
         if sure < UPSIDE_DOWN_BELOW:  # poor reading: the page may be upside down
-            words2, conf2, sure2 = _read(engine, *_turn_round(engine, img, boxes), page_index)
-            if sure2 > sure:
-                return words2, conf2
-    return words, conf
+            t_img, t_boxes = _turn_round(engine, img, boxes)
+            t_crops, t_read = _read(engine, t_img, t_boxes)
+            t_conf, t_sure = _confidence(engine, t_read)
+            if t_sure > sure:
+                img, boxes, crops, read, conf, sure = t_img, t_boxes, t_crops, t_read, t_conf, t_sure
+        if sure < HANDWRITING_BELOW:  # still poor: details written by hand
+            read = [_with_gaps(text, score, info) for text, score, info in _reread(crops, read)]
+            conf, _ = _confidence(engine, read)
+        return _words(engine, img, boxes, crops, read, page_index), conf
+
+
+def _hand_reader():
+    """The larger recogniser for handwriting, loaded on first use (None when it is not installed or
+    switched off with HANDWRITING_OCR=0)."""
+    global _hand
+    if _hand is None and HAND_MODEL.is_file() and \
+            os.environ.get("HANDWRITING_OCR", "1").strip().lower() not in ("0", "false", "no", "off"):
+        import types
+
+        from rapidocr.ch_ppocr_rec.utils import CTCLabelDecode
+
+        session = _Session(HAND_MODEL)
+        name = session.get_inputs()[0].name
+        keys = session.get_modelmeta().custom_metadata_map["character"].splitlines()
+        _hand = types.SimpleNamespace(session=lambda pixels: session.run(None, {name: pixels})[0],
+                                      postprocess_op=CTCLabelDecode(character=keys),
+                                      resize_norm_img=_get_engine().text_rec.resize_norm_img)  # same 48 px lines
+    return _hand
 
 
 def _find_lines(engine, img):
@@ -169,7 +228,7 @@ def _reads_better_turned(engine, img, boxes):
     return turned > as_is
 
 
-def _recognize(rec, crops, word_boxes=False):
+def _recognize(rec, crops, word_boxes=False, batch_size=BATCH):
     """(text, confidence, character positions or None) for each cropped text line. Lines are sorted
     by width and read in batches of about equally wide lines, so little of the work is padding."""
     ratios = [c.shape[1] / c.shape[0] for c in crops]
@@ -179,7 +238,7 @@ def _recognize(rec, crops, word_boxes=False):
     while start < len(order):
         end = start + 1
         limit = GROUP_SPREAD * max(ratios[order[start]], LINE_MIN_WIDTH)
-        while end < len(order) and end - start < BATCH and ratios[order[end]] <= limit:
+        while end < len(order) and end - start < batch_size and ratios[order[end]] <= limit:
             end += 1
         batch = order[start:end]
         widest = max(LINE_MIN_WIDTH, ratios[order[end - 1]])
@@ -192,12 +251,89 @@ def _recognize(rec, crops, word_boxes=False):
     return out
 
 
-def _read(engine, img, boxes, page_index):
-    """(words, mean confidence, share of lines read with 0.9+ confidence)."""
+def _read(engine, img, boxes):
+    """The page's text lines: (crops, [(text, confidence, character positions)])."""
+    crops = engine.crop_text_regions(img, boxes)
+    return crops, _recognize(engine.text_rec, crops, word_boxes=True)
+
+
+def _confidence(engine, read):
+    """(mean confidence, share of lines read with 0.9+ confidence) of the lines that are kept."""
+    scores = np.array([s for t, s, _ in read if t.strip() and s >= engine.text_score])
+    if not len(scores):
+        return 0.0, 0.0
+    return float(scores.mean()), float((scores >= 0.9).mean())
+
+
+def _reread(crops, read):
+    """Doubtful lines read again by the larger (handwriting) model. Its reading is kept when it is
+    fairly sure (HAND_TRUST) or surer than the small model: on a real handwritten form it read
+    '3805' for '380S', '42288' for '4R88' and the circled quantity '①' for '0', often with a
+    slightly lower confidence than the small model's wrong reading."""
+    hand = _hand_reader()
+    # fairly sure long lines are printed sentences (address, terms): reading them again costs the most
+    # (the larger model's time grows with a line's width) and changes nothing that matters
+    doubtful = [k for k, (_, score, _) in enumerate(read)
+                if score < REREAD_LONG_BELOW or (score < REREAD_BELOW
+                                                 and crops[k].shape[1] <= REREAD_MAX_RATIO * crops[k].shape[0])]
+    if hand is None or not doubtful:
+        return read
+    again = _recognize(hand, [crops[k] for k in doubtful], word_boxes=True, batch_size=HAND_BATCH)
+    read = list(read)
+    for k, new in zip(doubtful, again):
+        if _clean(new[0]) and (new[1] >= HAND_TRUST or new[1] > read[k][1]):
+            read[k] = new
+    return read
+
+
+SPLIT_GAP_MIN = 5    # model columns between two letters (the library itself splits words above 5)
+SPLIT_GAP_TIMES = 1.6  # ... and this many times the line's usual gap between letters
+
+
+def _with_gaps(text, score, info):
+    """Handwriting often comes back without the space between words ('DEEPAKSHARMA', 'RAJENTERPRISES')
+    or with rupees and paise run together across the column line ('4228814'). A gap between two
+    letters much wider than the line's usual one starts a new word: a space is put in the text and
+    the character positions are grouped again, so each word gets its own box."""
+    from rapidocr.ch_ppocr_rec.typings import WordType
+
+    # printed lines read with confidence keep their words: a wide printed letter ('m' in a bold
+    # 'RamElectricals') leaves a gap as wide as a handwritten word space
+    if score >= REREAD_BELOW and not any(len(t) >= 8 and re.fullmatch(r"[A-Z0-9]+", t) for t in text.split()):
+        return text, score, info
+    cols = [c for wc in (getattr(info, "word_cols", None) or []) for c in wc]
+    chars = [ch for ch in text if not ch.isspace()]
+    if len(cols) < 4 or len(cols) != len(chars):
+        return text, score, info
+    usual = float(np.median(np.diff(cols)))
+    cuts = {j for j in range(1, len(cols))
+            if cols[j] - cols[j - 1] >= max(SPLIT_GAP_MIN, SPLIT_GAP_TIMES * usual)}
+    if not cuts:
+        return text, score, info
+    out, j = [], 0  # the text with a space before every cut that has none yet
+    for ch in text:
+        if ch.isspace():
+            out.append(ch)
+            continue
+        if j in cuts and out and not out[-1].isspace():
+            out.append(" ")
+        out.append(ch)
+        j += 1
+    new_text = "".join(out)
+    words, word_cols, k = [], [], 0
+    for token in new_text.split():
+        words.append(list(token))
+        word_cols.append(cols[k: k + len(token)])
+        k += len(token)
+    info.words, info.word_cols = words, word_cols
+    info.word_types = [WordType.EN_NUM] * len(words)
+    return new_text, score, info
+
+
+def _words(engine, img, boxes, crops, read, page_index):
+    """Positioned words of the page from its read lines (rows levelled, see _level)."""
     from rapidocr.ch_ppocr_rec import TextRecOutput
 
-    crops = engine.crop_text_regions(img, boxes)
-    read = _recognize(engine.text_rec, crops, word_boxes=True)
     h, w = img.shape[:2]
     boxes = boxes.copy()
     boxes[..., 0] = np.clip(boxes[..., 0], 0, w)
@@ -208,8 +344,7 @@ def _read(engine, img, boxes, page_index):
     parts_of = located.word_results if len(located.word_results) == len(read) else [()] * len(read)
     keep = [k for k, (text, score, _) in enumerate(read) if text.strip() and score >= engine.text_score]
     if not keep:
-        return [], 0.0, 0.0
-    scores = np.array([read[k][1] for k in keep])
+        return []
     slopes = _slope_field(boxes[keep])
     words = []
     for k in keep:
@@ -222,9 +357,10 @@ def _read(engine, img, boxes, page_index):
             pts = _level(pts, slopes, w)
             x0, y0 = pts.min(axis=0)
             x1, y1 = pts.max(axis=0)
+            # below 1.0: elsewhere a confidence of 1.0 marks the exact text of a PDF text layer
             words.append(Word(text, _unit(x0 / w), _unit(y0 / h), _unit(x1 / w), _unit(y1 / h),
-                              float(score), page_index))
-    return words, float(scores.mean()), float((scores >= 0.9).mean())
+                              min(float(score), 0.999), page_index))
+    return words
 
 
 MAX_SLOPE = np.tan(np.radians(10))  # tilts beyond this are not text lines (or not straightened)
@@ -315,7 +451,7 @@ def _split_line(text, score, quad):
 def _clean(text):
     """Plain text: full-width punctuation ('：' from the multilingual model) becomes ASCII, and letters
     of other scripts (a stray Chinese character read from a speck) are dropped."""
-    text = unicodedata.normalize("NFKC", text)
+    text = unicodedata.normalize("NFKC", text).replace("×", "x")  # a handwritten x reads as a times sign
     text = "".join(ch for ch in text if not unicodedata.category(ch).startswith(("Lo", "Lm", "C")))
     return text.strip()
 

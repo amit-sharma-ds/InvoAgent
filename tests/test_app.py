@@ -38,30 +38,14 @@ def test_pages_render(client):
         assert client.get(url).status_code == 200, url
 
 
-def test_sidebar_has_tabs_and_workspace_switch(client):
+def test_sidebar_has_tabs_and_no_demo_workspace(client):
     html = client.get("/").data.decode("utf-8")
     for tab in ["Overview", "Upload", "Invoices", "Review queue", "Data sheet", "Vendors", "Phone camera"]:
         assert tab in html
-    assert "/workspace/live" in html and "/workspace/demo" in html
-
-
-def test_live_and_demo_workspaces_are_separate(client):
-    invoice_id = _upload(client, _to_pdf(_colon_layout), "live.pdf")
-    assert app_module.stores["live"].get(invoice_id) is not None
-    client.post("/workspace/demo")
-    assert b"Demo workspace" in client.get("/").data
-    assert app_module.stores["demo"].get(invoice_id) is None or \
-        app_module.stores["demo"].get(invoice_id)["file_name"] != "live.pdf"  # live data is not in demo
-    assert b"0 matching" in client.get("/invoices?q=INV-2024-0042").data
-    client.post("/workspace/live")
-    assert b"0 matching" not in client.get("/invoices?q=INV-2024-0042").data
-    assert client.post("/workspace/other").status_code == 404
-
-
-def test_samples_are_refused_in_live(client):
-    client.post("/workspace/live")
-    resp = client.get("/sample/anything.pdf")
-    assert resp.status_code == 302 and "/upload" in resp.headers["Location"]
+    assert "/workspace/" not in html and "Demo" not in html  # the Demo workspace was removed
+    assert client.post("/workspace/demo").status_code == 404
+    assert client.get("/sample/anything.pdf").status_code == 404
+    assert list(app_module.stores) == ["live"]
 
 
 def test_reviewer_can_correct_and_approve(client):
@@ -161,10 +145,6 @@ def test_api_errors(client):
     resp = client.post("/api/parse", data={"file": (io.BytesIO(b"hello"), "notes.txt")},
                        content_type="multipart/form-data")
     assert resp.status_code == 422
-
-
-def test_unknown_sample_is_refused(client):
-    assert client.get("/sample/app.py").status_code == 302
 
 
 def test_session_cookie_has_its_own_name(client):

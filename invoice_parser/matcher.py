@@ -26,7 +26,7 @@ import numpy as np
 from rapidfuzz import fuzz
 
 from . import config
-from .schema import FIELD_BLOCKLIST, FIELD_SYNONYMS
+from .schema import ALONE_ONLY, FIELD_BLOCKLIST, FIELD_SYNONYMS
 
 os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
@@ -171,12 +171,14 @@ class LabelMatcher:
         if len(tokens) > 6:  # real labels are short; long sentences are not labels
             return None
         for phrase, field in self.entries:
-            if phrase == key and not self._blocked(field, tokens):
+            # a listed phrase is meant as it is: "total amount after tax" is the total although it has
+            # the word "tax" (the blocklist guards the looser fuzzy / semantic matches below)
+            if phrase == key:
                 return Match(field, 1.0, "exact", phrase)
 
         best = None
         for phrase, field in self.entries:
-            if self._blocked(field, tokens):
+            if self._blocked(field, tokens) or phrase in ALONE_ONLY:  # "no", "name": exact matches only
                 continue
             score = fuzz.ratio(key, phrase) / 100.0
             if score >= self.fuzzy_min and (best is None or score > best.score):
@@ -195,7 +197,7 @@ class LabelMatcher:
 
         vec = _char_ngrams(key)
         for (phrase, field), grams in zip(self.entries, self._ngrams):
-            if self._blocked(field, tokens):
+            if self._blocked(field, tokens) or phrase in ALONE_ONLY:
                 continue
             score = _cosine(vec, grams)
             if score >= self.lexical_min and (best is None or score > best.score):
@@ -208,7 +210,7 @@ class LabelMatcher:
         sims = self._syn_vecs @ vec
         for idx in np.argsort(-sims)[:12]:
             phrase, field = self.entries[idx]
-            if self._blocked(field, tokens):
+            if self._blocked(field, tokens) or phrase in ALONE_ONLY:
                 continue
             score = float(sims[idx])
             return Match(field, score, "embedding", phrase) if score >= self.embed_min else None

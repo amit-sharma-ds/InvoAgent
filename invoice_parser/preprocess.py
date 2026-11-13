@@ -57,12 +57,25 @@ def prepare_camera_photo(img):
         color = cv2.resize(color, None, fx=f, fy=f, interpolation=cv2.INTER_AREA)
     gray = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY)
     quad = _find_document_quad(gray)
-    if quad is not None:
+    if quad is not None and not _paper_around(gray, quad):
         color = _four_point_warp(color, quad)
         gray = cv2.cvtColor(color, cv2.COLOR_BGR2GRAY)
     if _text_runs_vertically(gray):  # photographed sideways (phone held flat, no rotation tag)
         return np.ascontiguousarray(np.rot90(color, 1)), True
     return color, False
+
+
+def _paper_around(gray, quad):
+    """True when the outline found is a box printed on the page (a bill book's border, on a scan or
+    a photo filling the frame) rather than the page's edge: the image around it is as bright as the
+    paper inside. Cutting the page out along such a box would drop the header printed above it
+    (the seller's name and GSTIN)."""
+    mask = np.zeros(gray.shape, np.uint8)
+    cv2.fillConvexPoly(mask, quad.astype(np.int32), 255)
+    inside, outside = gray[mask > 0], gray[mask == 0]
+    if outside.size < 0.02 * gray.size:
+        return False
+    return float(np.median(outside)) >= 0.9 * float(np.median(inside))
 
 
 def _remove_ruled_lines(gray):

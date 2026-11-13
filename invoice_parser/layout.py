@@ -8,6 +8,8 @@ import re
 from dataclasses import dataclass, field
 from statistics import median
 
+from .models import Word
+
 
 @dataclass
 class Cell:
@@ -63,7 +65,61 @@ def _group_into_lines(words):
     return sorted(lines, key=lambda ws: sum(x.yc for x in ws) / len(ws))
 
 
+_RUPEE_HEAD_RE = re.compile(r"(?i)^(rs\.?|rupees?|₹)$")
+_PAISE_HEAD_RE = re.compile(r"(?i)^(p\.?|ps\.?|paise)$")
+_RUPEES_RE = re.compile(r"^\d[\d,]*$")
+_PAISE_RE = re.compile(r"^\d{1,2}$")
+# "3805=93", "42288/14": rupees and paise written with a stroke between them
+_STROKE_DECIMAL_RE = re.compile(r"^(\d[\d,]*)\s*([=/:|])\s*(\d{2})$")
+
+
+def _same_row(a, b):
+    return min(a.y1, b.y1) - max(a.y0, b.y0) >= 0.4 * min(a.y1 - a.y0, b.y1 - b.y0)
+
+
+def join_paise(words):
+    """Bill books print amounts in two columns, 'Rs.' and 'P.' (rupees | paise), and the paise are
+    written in a box of their own: '42288 | 14' is 42288.14. On an OCR'd page with such a header,
+    a whole number right of the 'Rs.' header followed closely by a 1-2 digit number that ends its
+    row (the paise box is the last box of the row) become one amount. Rupees and paise written with
+    a stroke between them become one amount too: '3805=93' always, '42288/14' only at the end of a
+    row on such a page. Positions are not compared with the 'P.' header itself: on a tilted photo
+    the columns lean. Words of a PDF text layer (confidence 1.0) are never changed."""
+    ocr = [w for w in words if w.conf < 1.0]
+    if not ocr:
+        return words
+    heads = [(r, p) for r in ocr if _RUPEE_HEAD_RE.match(r.text)
+             for p in ocr if _PAISE_HEAD_RE.match(p.text) and p.x0 > r.x1 and _same_row(r, p)
+             and p.x0 - r.x1 < 0.25]
+    rupee_head = min(heads, key=lambda rp: rp[1].x0 - rp[0].x1)[0] if heads else None
+
+    def ends_row(w):
+        return not any(o is not w and o.x0 > w.x1 - 0.005 and _same_row(o, w) for o in words)
+
+    merged, used = {}, set()  # index -> joined word; indexes of paise words joined into an amount
+    for i, w in enumerate(words):
+        if w.conf >= 1.0 or i in used:
+            continue
+        m = _STROKE_DECIMAL_RE.match(w.text)
+        if m and (m.group(2) == "=" or (rupee_head and w.x0 > rupee_head.x0 - 0.1 and ends_row(w))):
+            merged[i] = Word(f"{m.group(1)}.{m.group(3)}", w.x0, w.y0, w.x1, w.y1, w.conf, w.page)
+        elif (rupee_head and w.y0 > rupee_head.y1 and _RUPEES_RE.match(w.text) and len(w.text) >= 2
+              and w.x1 > rupee_head.x0):
+            h = w.y1 - w.y0
+            for j, p in enumerate(words):
+                if (j == i or j in used or j in merged or p.conf >= 1.0 or not _PAISE_RE.match(p.text)
+                        or not -0.2 * h <= p.x0 - w.x1 <= 0.15 or not _same_row(w, p) or not ends_row(p)):
+                    continue
+                merged[i] = Word(f"{w.text}.{int(p.text):02d}", w.x0, min(w.y0, p.y0), p.x1, max(w.y1, p.y1),
+                                 min(w.conf, p.conf), w.page)
+                used.add(j)
+                break
+    return [merged.get(i, w) for i, w in enumerate(words) if i not in used]
+
+
 def build_lines(pages):
+    for page in pages:  # amounts split over 'Rs.' and 'P.' columns become one amount
+        page.words = join_paise(page.words)
     all_words = [w for p in pages for w in p.words if not _is_border(w)]
     if not all_words:
         return []

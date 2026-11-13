@@ -54,16 +54,26 @@ def test_phone_photo_is_read_by_the_fast_reader(parser, monkeypatch, turns):
     assert f["total"]["value"] == pytest.approx(295000)
 
 
-def test_images_without_camera_details_keep_tesseract(monkeypatch):
-    def no_fast_reader(*args, **kwargs):
-        raise AssertionError("scans and other images stay on Tesseract")
+def test_scans_are_read_by_the_fast_reader_too(monkeypatch):
+    def no_tesseract(*args, **kwargs):
+        raise AssertionError("a scan should not need Tesseract")
 
-    monkeypatch.setattr(fast_ocr, "read_photo", no_fast_reader)
+    monkeypatch.setattr(fast_ocr, "available", lambda: True)
+    monkeypatch.setattr(fast_ocr, "read_photo", lambda img, page, check_upside_down=False: ([], 0.8))
+    monkeypatch.setattr(ingest, "ocr_image", no_tesseract)
+    png = io.BytesIO()
+    Image.new("RGB", (400, 300), "white").save(png, "PNG")
+    pages = ingest.load_pages("scan.png", png.getvalue())
+    assert len(pages) == 1 and pages[0].method == "ocr" and pages[0].ocr_conf == 0.8
+
+
+def test_tesseract_reads_images_when_the_fast_reader_is_off(monkeypatch):
+    monkeypatch.setattr(fast_ocr, "available", lambda: False)
     monkeypatch.setattr(ingest, "ocr_image", lambda img, page, cfg=None: ([], 0.9))
     png = io.BytesIO()
     Image.new("RGB", (400, 300), "white").save(png, "PNG")
     pages = ingest.load_pages("scan.png", png.getvalue())
-    assert len(pages) == 1 and pages[0].method == "ocr"
+    assert len(pages) == 1 and pages[0].ocr_conf == 0.9
 
 
 def test_a_failing_fast_reader_falls_back_to_tesseract(monkeypatch):
@@ -75,6 +85,40 @@ def test_a_failing_fast_reader_falls_back_to_tesseract(monkeypatch):
     monkeypatch.setattr(ingest, "ocr_image", lambda img, page, cfg=None: ([], 0.9))
     pages = ingest.load_pages("phone-20261112-101010.jpg", _camera_jpeg())
     assert len(pages) == 1 and pages[0].ocr_conf == 0.9  # read by the (stubbed) Tesseract path
+
+
+def _jpeg(width, height):
+    buf = io.BytesIO()
+    Image.new("RGB", (width, height), "white").save(buf, "JPEG")
+    return buf.getvalue()
+
+
+def test_big_phone_photos_are_decoded_at_a_smaller_size():
+    import cv2
+
+    assert ingest._photo_decode_flag(_jpeg(4608, 2592)) == cv2.IMREAD_COLOR       # 12 MP: as it is
+    assert ingest._photo_decode_flag(_jpeg(8160, 6144)) == cv2.IMREAD_REDUCED_COLOR_2  # 50 MP: half
+    assert ingest._photo_decode_flag(_jpeg(10400, 7000)) == cv2.IMREAD_REDUCED_COLOR_4
+    png = io.BytesIO()
+    Image.new("RGB", (8160, 6144), "white").save(png, "PNG")
+    assert ingest._photo_decode_flag(png.getvalue()) == cv2.IMREAD_COLOR  # only JPEGs are reduced
+
+
+def test_a_big_photo_still_falls_back_to_a_full_size_tesseract_page(monkeypatch):
+    seen = []
+    monkeypatch.setattr(fast_ocr, "available", lambda: True)
+    monkeypatch.setattr(fast_ocr, "read_photo", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("broken")))
+    monkeypatch.setattr(ingest, "preprocess_scan", lambda img, **k: seen.append(img.shape) or img[:8, :8])
+    monkeypatch.setattr(ingest, "ocr_image", lambda img, page, cfg=None: ([], 0.9))
+    ingest.load_pages("phone-big.jpg", _jpeg(5400, 3000))
+    assert seen == [(3000, 5400, 3)]
+
+
+@needs_fast_ocr
+def test_the_models_give_their_working_memory_back_after_each_run():
+    session = fast_ocr._get_engine().text_rec.session.session
+    assert isinstance(session, fast_ocr._Session)
+    assert session._run_options.get_run_config_entry("memory.enable_memory_arena_shrinkage") == "cpu:0"
 
 
 def test_pictures_from_the_apps_own_camera_page_count_as_photos():
