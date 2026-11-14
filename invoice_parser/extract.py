@@ -15,12 +15,14 @@ Strategy (no training needed):
   6. Totals are cross-checked: subtotal + tax - discount = total, line items = subtotal.
 """
 import re
+from collections import namedtuple
 from dataclasses import dataclass
 
 from rapidfuzz import fuzz
 from rapidfuzz.distance import Levenshtein
 
 from . import normalize as nz
+from .layout import Line
 from .matcher import Match, normalize_label
 from .schema import ALONE_ONLY, PARTY_FIELDS
 
@@ -48,6 +50,7 @@ ITEM_STOP = ("total", "sub total", "subtotal", "grand total", "amount in words",
              "amount payable", "terms", "notes", "bank", "thank", "signature", "tax", "igst", "cgst",
              "sgst", "gst", "vat", "discount", "round off", "declaration", "payment", "summary",
              "shipping", "freight")
+_NO_NUMBER_RE = re.compile(r"no\.\s*(\d[\d\-/]{2,})", re.I)  # 'No.02857' under the INVOICE title
 _HASH_NUMBER_RE = re.compile(r"(?:no\.?\s*)?#\s*:?\s*([A-Za-z0-9][A-Za-z0-9\-/.]{0,24})", re.I)
 TOTAL_FIELDS = {"subtotal", "tax", "total", "discount", "shipping"}
 # "To" / "From" without a colon are labels only when they stand alone in their cell
@@ -59,7 +62,8 @@ _COLUMN_ROLES = (
     ("gross", re.compile(r"\bgross\b|\btotal incl")),
     ("unit_price", re.compile(r"\b(rate|price|unit cost|cost)\b")),
     ("quantity", re.compile(r"\b(qty|quantity|units|hours|hrs|pcs|nos)\b")),
-    ("amount", re.compile(r"\b(amount|worth|value|total|net)\b")),
+    ("paise", re.compile(r"^(p|ps|paise)$")),  # bill books: the paise of the amount in a narrow column
+    ("amount", re.compile(r"\b(amount|worth|value|total|net|rs|inr)\b")),
     ("description", re.compile(r"\b(description|item|items|particulars|product|products|service|services|"
                                r"details|goods|article)\b")),
 )
@@ -95,6 +99,8 @@ def is_table_header(line) -> bool:
     tokens = set(re.findall(r"[a-z]+", line.text.lower()))
     if re.search(r"\d{3,}", line.text):
         return False  # "Total Amount Before Tax 42288": a labelled amount, column titles hold no figures
+    if len(tokens) <= 4 and tokens & {"description", "particulars"} and tokens & {"amount", "qty", "rate"}:
+        return True  # a short header: "DESCRIPTION | AMOUNT (£)"
     return bool(tokens & _TABLE_STRONG) and len(tokens & _TABLE_WORDS) >= 3
 
 
@@ -259,7 +265,7 @@ def collect_candidates(lines, matcher, skip_lines=()):
                         add(mt, label, value, ln, k, False, 0.9)
                         break
                 else:
-                    number = _HASH_NUMBER_RE.fullmatch(cell)
+                    number = _HASH_NUMBER_RE.fullmatch(cell) or _NO_NUMBER_RE.fullmatch(cell)
                     if number and ln.page == 0 and ln.y0 < 0.3:
                         # "INVOICE / # 5873": a bare '#' in the header is the invoice number
                         add(Match("invoice_number", 0.85, "exact", "#"), "#", number.group(1), ln, k, True)
@@ -453,6 +459,11 @@ def _parse_value(c, lines, label_lines, kind, day_first, text, penalty, last=Tru
         if value is None:  # written in boxes or with strokes: "11 | 09 | 2026", "10 9 26"
             joined = re.sub(r"\b(\d{1,2})\s*[|/ ]\s*(\d{1,2})\s*[|/ ]\s*((?:19|20)?\d{2})\b", r"\1/\2/\3", text)
             value = nz.find_date(joined, day_first) if joined != text else None
+        if value is None:  # '992026': 9-9-2026 with the strokes between the parts not read
+            m = re.search(r"(?<!\d)(\d{2}|\d{4})((?:19|20)\d\d)(?!\d)", text)
+            if m:
+                dm = m.group(1)
+                value = nz.find_date(f"{dm[:len(dm) // 2]}/{dm[len(dm) // 2:]}/{m.group(2)}", day_first)
     elif kind == "amount":
         text = _QTY_UNIT_RE.sub(" ", text)  # "Total | 1 NOS | 2,95,000.00": the quantity is not money
         text = _PHONE_NUMBER_RE.sub(" ", text)  # "Tax Invoice  Mob.:9000012345": a phone number is not money
@@ -461,7 +472,7 @@ def _parse_value(c, lines, label_lines, kind, day_first, text, penalty, last=Tru
             value = _last_amount(text)
         if value is None:
             # a handwritten stroke after the figure read as a letter ('49900t'), or '/-' ('49,900/-')
-            trimmed = re.sub(r"(?<=\d)(?:[A-Za-z]{1,2}\b|/-)", " ", text)
+            trimmed = re.sub(r"(?<=\d)(?:[A-Za-z]{1,2}\b|/-|-(?=\s|$))", " ", text)  # also '7226-'
             if trimmed != text:
                 value = _cell_number(trimmed)
                 value = _last_amount(trimmed) if value is None else value
@@ -565,6 +576,7 @@ def parse_party(block):
         # misread as well ('amo:' for 'ame:')
         if tail in _LABEL_TAILS or (2 < len(tail) <= 4 and max(fuzz.ratio(tail, t) for t in ("ame", "name")) >= 66):
             name = cut.group(2)
+    name = re.sub(r"^(?:Name|NAME)(?=[A-Z])", "", name)  # 'NameKavya Infotech': the label run into the name
     return {
         "name": re.sub(r"\s+", " ", name).strip(" ,;|:-_~/\\") or None,
         "address": ", ".join(address) or None,
@@ -987,17 +999,24 @@ def _whole(qty):
     return int(qty) if qty is not None and float(qty).is_integer() else qty  # "2", not "2.0"
 
 
+def _column_role(text):
+    if "%" in text:
+        return "skip"
+    text = normalize_label(text)
+    return next((name for name, pattern in _COLUMN_ROLES if pattern.search(text)), "skip")
+
+
 def _column_roles(header_line):
     columns = []
     for cell in header_line.cell_boxes:
-        text = normalize_label(cell.text)
-        role = "skip"
-        if "%" not in cell.text:
-            for name, pattern in _COLUMN_ROLES:
-                if pattern.search(text):
-                    role = name
-                    break
-        columns.append((role, cell))
+        words = getattr(cell, "words", None) or []
+        roles = [_column_role(w[0]) for w in words]
+        if len({r for r in roles if r != "skip"}) >= 2:
+            # titles printed close together read as one cell: 'QTY PCS. SIZE RATE'
+            for (text, x0, x1), role in zip(words, roles):
+                columns.append((role, _Span(text, x0, x1)))
+            continue
+        columns.append((_column_role(cell.text), cell))
     return columns
 
 
@@ -1014,11 +1033,79 @@ def _qty_rate_from_text(text, amount, qty, rate):
     return qty, rate
 
 
+_CIRCLED_DIGITS = str.maketrans("①②③④⑤⑥⑦⑧⑨⓪", "1234567890")
+# rupees and paise with a stroke between them, as written in bill books: '42,288-14', '42288/14', '3805=93'
+_STROKE_AMOUNT_RE = re.compile(r"^(\d[\d,]{2,})\s*[=/\-:|]\s*(\d{2})$")
+_Span = namedtuple("_Span", "text x0 x1")
+
+
+def _column_number(text, role):
+    """A figure in a numeric column of an item table, also as written by hand: '①' (a circled
+    quantity), '7nes' (7 nos), '42,288-14' (paise after a stroke), '240-' and '2300/-' (a stroke after
+    the figure), '380S' (look-alike letters)."""
+    t = text.translate(_CIRCLED_DIGITS).strip(" |_~")
+    if role == "quantity":
+        value = _quantity(t)
+        return value if value is not None else _lookalike_amount(t)
+    value = _cell_number(t)
+    if value is None:
+        m = _STROKE_AMOUNT_RE.match(t)
+        value = nz.parse_amount(f"{m.group(1)}.{m.group(2)}") if m else None
+    if value is None:
+        value = _cell_number(re.sub(r"\s*(/-|[-=/~]+)$", "", t))
+    return value if value is not None else _lookalike_amount(t)
+
+
+_UNIT_WORD_RE = re.compile(r"(?i)^(nos?|pcs?|pieces?|kgs?|gms?|set|sets|each|box|mtrs?|ltrs?|units?|pairs?)\.?$")
+
+
+def _column_of(span, columns):
+    """The column a word sits in: the header it overlaps, else the header with the smallest gap to it
+    (column titles are centred, so a value can sit well to the side of its title)."""
+    best = max(columns, key=lambda col: _overlap(col[1], span))
+    if _overlap(best[1], span) > 0:
+        return best[0]
+    return min(columns, key=lambda col: max(0.0, col[1].x0 - span.x1, span.x0 - col[1].x1))[0]
+
+
+def _split_cell(cell, columns):
+    """(role, text) parts of a row's cell. Handwriting written close together runs across columns
+    ('8414 7nes 1986.0 13902.1' under HSN | QTY | RATE | AMOUNT): its words go each under their own column."""
+    words = getattr(cell, "words", None) or [(cell.text, cell.x0, cell.x1)]
+    has_desc = any(r == "description" for r, _ in columns)
+    roles = []
+    for w in words:
+        role = _column_of(_Span(*w), columns)
+        # a word of the description written beyond its column ('Royal' under S.No., 'doors' under Amount)
+        if (has_desc and role != "description" and re.search(r"[A-Za-z]{2,}", w[0])
+                and not re.search(r"\d", w[0]) and not _UNIT_WORD_RE.match(w[0])):
+            role = "description"
+        roles.append(role)
+    if len(set(roles)) < 2:
+        return [(roles[0], cell.text)]
+    parts = []
+    for (text, _, _), role in zip(words, roles):
+        if parts and parts[-1][0] == role:
+            parts[-1] = (role, f"{parts[-1][1]} {text}")
+        else:
+            parts.append((role, text))
+    return parts
+
+
 def _line_items(lines, stop_lines):
     header_idx = next((i for i, ln in enumerate(lines) if is_table_header(ln)), None)
     if header_idx is None:
         return [], False
     columns = _column_roles(lines[header_idx])
+    first = header_idx + 1
+    head = lines[header_idx]
+    for k in (header_idx - 1, header_idx + 1):  # a header on two rows: 'AMOUNT' above 'Rs. | P.'
+        if (0 <= k < len(lines) and lines[k].page == head.page and abs(lines[k].y0 - head.y0) <= 0.02
+                and not re.search(r"\d{3,}", lines[k].text) and k not in stop_lines):
+            more = _column_roles(lines[k])
+            if any(r != "skip" for r, _ in more):
+                columns += more
+                first = max(first, k + 1)
     roles = {r for r, _ in columns}
     if not roles & {"amount", "gross"}:  # headers we cannot read: fall back to the row heuristic
         items = []
@@ -1032,32 +1119,72 @@ def _line_items(lines, stop_lines):
                 items.append(row)
         return items, True
 
-    items = []
-    for ln in lines[header_idx + 1:]:
+    items, rows = [], []
+    for ln in lines[first:]:
         if ln.index in stop_lines or _starts_with_any(ln.text, ITEM_STOP):
             break
         if is_table_header(ln):  # header repeated on a new page
-            columns = _column_roles(ln)
+            rows.append(("header", ln))
             continue
         if _TAX_COMPONENT_RE.search(ln.text):
             continue  # "Output CGST 9%" rows inside the table are tax, not items
-        row = {"description": [], "quantity": None, "unit_price": None, "amount": None, "gross": None}
+        prev = rows[-1][1] if rows and rows[-1][0] == "row" else None
+        if prev is not None and prev.page == ln.page and (
+                min(prev.y1, ln.y1) - max(prev.y0, ln.y0) >= 0.5 * min(prev.y1 - prev.y0, ln.y1 - ln.y0)):
+            # handwriting of one row on two baselines ('3) Bathroom ... 2' and '230  460.')
+            rows[-1] = ("row", Line(prev.index, prev.page, f"{prev.text}  {ln.text}", min(prev.y0, ln.y0),
+                                    max(prev.y1, ln.y1), min(prev.conf, ln.conf), prev.gap_before,
+                                    sorted(prev.cell_boxes + ln.cell_boxes, key=lambda c: c.x0)))
+            continue
+        rows.append(("row", ln))
+    pending = None  # a row with its description and rate whose amount is on the next line
+    last = None  # the last row read
+    for kind, ln in rows:
+        if kind == "header":
+            columns = _column_roles(ln)
+            continue
+        row = {"description": [], "quantity": None, "unit_price": None, "amount": None, "gross": None,
+               "paise": None}
         for cell in ln.cell_boxes:
-            role = _nearest(cell, [(r, c) for r, c in columns])[0]
-            if role == "description":
-                row["description"].append(cell.text)
-            elif role in _NUMERIC_ROLES and row[role] is None:
-                row[role] = _quantity(cell.text) if role == "quantity" else _cell_number(cell.text)
+            for role, text in _split_cell(cell, columns):
+                if role == "description":
+                    row["description"].append(text)
+                elif role in _NUMERIC_ROLES + ("paise",) and row[role] is None:
+                    row[role] = _column_number(text, role)
         amount = row["amount"] if row["amount"] is not None else row["gross"]
-        desc = re.sub(r"^\d{1,3}\s*[|.)]\s*", "", " ".join(row["description"])).strip(" -|") or None  # drop "1|"
+        if (amount is not None and amount == int(amount) and row["paise"] is not None
+                and row["paise"] == int(row["paise"]) and 0 <= row["paise"] < 100):
+            amount += row["paise"] / 100  # '42288 | 14' under 'Rs. | P.'
+        desc = re.sub(r"^[\d①-⑨]{1,3}\s*[|.)>]?\s+(?=\D)", "", " ".join(row["description"])).strip(" -|") or None
+        if amount is not None and desc is None and pending:
+            # the amount written lower than its row ('Carrier 1.5TN | 28389.83' then '28389.83')
+            desc = pending["description"]
+            row["quantity"] = row["quantity"] if row["quantity"] is not None else pending["quantity"]
+            row["unit_price"] = row["unit_price"] if row["unit_price"] is not None else pending["unit_price"]
+        pending = None
         if amount is not None and (row["quantity"] is None or row["unit_price"] is None):
             row["quantity"], row["unit_price"] = _qty_rate_from_text(ln.text, amount, row["quantity"],
                                                                      row["unit_price"])
+        rate = row["unit_price"]
+        if row["quantity"] == 0:
+            row["quantity"] = None  # a quantity of 0 with an amount: a circled '①' read as '0'
+        if amount is None and rate and row["quantity"]:
+            amount = round(rate * row["quantity"], 2)  # the amount unreadable: quantity x rate
+        if amount is not None and rate and row["quantity"] is None:
+            q = amount / rate  # the quantity not readable (circled, or left out): amount / rate
+            if q >= 1 and abs(q - round(q)) <= 0.001:
+                row["quantity"] = round(q)
         if amount is not None:
             items.append({"description": desc, "quantity": _whole(row["quantity"]),
                           "unit_price": row["unit_price"], "amount": amount})
-        elif desc and items and row["quantity"] is None and row["unit_price"] is None:
-            items[-1]["description"] = f"{items[-1]['description'] or ''} {desc}".strip()  # wrapped line
+        elif desc and (row["quantity"] is not None or row["unit_price"] is not None):
+            pending = {"description": desc, "quantity": row["quantity"], "unit_price": row["unit_price"]}
+        elif (desc and items and row["quantity"] is None and row["unit_price"] is None
+              and (last is None or ln.page != last.page or ln.y0 - last.y1 < 2 * (last.y1 - last.y0))):
+            # a wrapped line, right below its row (not a stamp or note further down)
+            items[-1]["description"] = f"{items[-1]['description'] or ''} {desc}".strip()
+        if amount is not None or desc:
+            last = ln
     return items, True
 
 
@@ -1109,7 +1236,7 @@ def _correct(field, new_value, why, warnings, name):
     warnings.append(f"{name} was read as {old:,.2f} and corrected to {new_value:,.2f}: {why}. Please check.")
 
 
-def _reconcile_amounts(fields, items, words_total, warnings, figures=frozenset(), round_off=False):
+def _reconcile_amounts(fields, items, words_total, warnings, figures=frozenset(), round_off=False, ocr=False):
     """Repair OCR misreads in the amounts using the invoice's own arithmetic.
 
     A value is changed only when (1) the other amounts on the invoice prove what it must be, and
@@ -1191,7 +1318,7 @@ def _reconcile_amounts(fields, items, words_total, warnings, figures=frozenset()
         if abs(item_sum - expected) <= 0.05 and _one_digit_apart(sub, expected):
             _correct(fields["subtotal"], expected, "the line items and total - tax both give this",
                      warnings, "Subtotal")
-    _gst_solve(fields, item_sum, words_total, warnings, round_off)
+    _gst_solve(fields, item_sum, words_total, warnings, round_off, ocr)
 
 
 # GST rates (CGST + SGST together, or IGST), the most common first
@@ -1229,7 +1356,7 @@ def _total_garbled(read, want, base):
     return len(r) != len(w) and Levenshtein.distance(r, w) <= 2
 
 
-def _gst_solve(fields, item_sum, words_total, warnings, round_off=False):
+def _gst_solve(fields, item_sum, words_total, warnings, round_off=False, ocr=False):
     """Handwritten GST bills whose amounts do not add up: CGST = SGST = taxable value x rate / 2 (or
     IGST = taxable value x rate) at a standard GST rate, and taxable value + tax = total. The amounts
     are put back together only when the tax figures that were read support the rate (their rupees, or
@@ -1257,14 +1384,20 @@ def _gst_solve(fields, item_sum, words_total, warnings, round_off=False):
                 h = round(base * rate / 2, 2) if halves else round(base * rate, 2)
                 parts = {"CGST": h, "SGST": h} if halves else {"IGST": h}
                 support = sum(_tax_support(comps.get(k), v) for k, v in parts.items())
-                if any(comps.get(k) is not None and comps[k] >= v / 5 and not _tax_support(comps[k], v)
-                       for k, v in parts.items()):
-                    continue  # a clearly different figure was read (27,900 for 22,500): a real mismatch stays visible
                 pred = round(base + sum(parts.values()), 2)
                 agrees = any(abs(t - p) <= 1 for t in totals for p in (pred, round(pred)))
                 exact = any(abs(t - pred) <= 0.01 for t in totals)
-                if support < 2 or not (agrees and support + 3 >= 5 or support >= 4 and (
-                        tot is None or any(_total_garbled(tot, p, base) for p in (pred, round(pred))))):
+                other = [k for k, v in parts.items()
+                         if comps.get(k) is not None and comps[k] >= v / 5 and not _tax_support(comps[k], v)]
+                # a clearly different figure was read (27,900 for 22,500): on a PDF's text layer a real
+                # mismatch stays visible; read by OCR ('2856.08' for a handwritten 2555.08) it is put right
+                # only when the other half is exact and the total agrees
+                garbled = tot is None or any(_total_garbled(tot, p, base) for p in (pred, round(pred)))
+                half_exact = any(_tax_support(comps.get(k), v) == 3 for k, v in parts.items() if k not in other)
+                if other and not (ocr and half_exact and (agrees or garbled)):
+                    continue
+                if support < 2 or not (agrees and support + 3 >= 5 or support >= 4 and garbled
+                                       or ocr and half_exact and garbled):
                     continue
                 key = (support + 3 * agrees + exact, base == b, -rank)
                 if best is None or key > best[0]:
@@ -1287,6 +1420,10 @@ def _gst_solve(fields, item_sum, words_total, warnings, round_off=False):
         warnings.append(f"Tax was read as {old_tax:,.2f} and set to {tax['value']:,.2f}: {why}. Please check.")
     if sub_f and abs(base - sub_f["value"]) > 0.01:
         _correct(sub_f, base, "the paise follow from the total at this GST rate", warnings, "Subtotal")
+    elif sub_f is None:
+        fields["subtotal"] = {"value": base, "confidence": round(0.8 * tax["confidence"], 3),
+                              "source_label": "Line items", "source_text": "", "page": None}
+        warnings.append(f"Subtotal could not be read; the line items give {base:,.2f}. Please check.")
     pred = round(base + tax["value"], 2)
     total = float(round(pred)) if round_off else pred
     if tot_f is None:
@@ -1399,7 +1536,14 @@ def extract_invoice(lines, matcher):
     figures = {v for v in (nz.parse_amount(m.group(0)) for m in nz.AMOUNT_RE.finditer(nz.strip_dates(full_text)))
                if v is not None}
     _reconcile_amounts(fields, items, words_total, warnings, figures,
-                       round_off=bool(re.search(r"(?i)\bround\s*-?\s*off\b|\br\s*/\s*off\b", full_text)))
+                       round_off=bool(re.search(r"(?i)\bround\s*-?\s*off\b|\br\s*/\s*off\b", full_text)),
+                       ocr=any(ln.conf < 1.0 for ln in lines))
+    sub = _amount_of(fields, "subtotal")
+    if len(items) == 1 and sub is not None and sub != int(sub) and items[0]["amount"] == int(sub):
+        # one item whose paise were not readable ('42288' with '14' in the paise box): the subtotal's
+        for key in ("amount", "unit_price"):
+            if items[0][key] == int(sub) and (key == "amount" or items[0]["quantity"] in (1, None)):
+                items[0][key] = sub
     total, tax = _amount_of(fields, "total"), _amount_of(fields, "tax")
     if fields["subtotal"] is None and total is not None and tax is not None:
         derived = round(total - tax - (_amount_of(fields, "shipping") or 0) + (_amount_of(fields, "discount") or 0), 2)

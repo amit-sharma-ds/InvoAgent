@@ -170,6 +170,7 @@ def read_photo(img, page_index: int, check_upside_down: bool = False):
         if sure < HANDWRITING_BELOW:  # still poor: details written by hand
             read = [_with_gaps(text, score, info) for text, score, info in _reread(crops, read)]
             boxes, crops, read = _fill_gaps(engine, img, boxes, crops, read)
+            boxes, crops, read = _reread_dates(engine, img, boxes, crops, read)
             conf, _ = _confidence(engine, read)
         return _words(engine, img, boxes, crops, read, page_index), conf
 
@@ -347,6 +348,53 @@ def _fill_gaps(engine, img, boxes, crops, read):
         return boxes, crops, read
     return (np.concatenate([boxes, np.stack([spots[k][0] for k in new])]), list(crops) + [gap_crops[k] for k in new],
             list(read) + [found[k] for k in new])
+
+
+_DATE_LABEL = re.compile(r"(?i)\bdat(e|ed)\b\s*[:.;]?\s*\S{0,3}$")
+_WRITTEN_DATE = re.compile(r"\b(\d{1,2})\s*[|/.\- ]\s*(\d{1,2})\s*[|/.\- ]\s*((?:19|20)?\d{2})\b")
+
+
+def _reread_dates(engine, img, boxes, crops, read):
+    """A date written in the boxes of a form ('Date : 11 | 09 | 2026') comes back in pieces, and a
+    '11' between box lines is taken for the lines themselves. The label and what is written right of
+    it on the same row are read again as one line by the larger model ('Date:11 09 2026'), which is
+    kept when it holds a whole date that the pieces did not."""
+    hand = _hand_reader()
+    if hand is None:
+        return boxes, crops, read
+    x0, y0 = boxes[..., 0].min(axis=1), boxes[..., 1].min(axis=1)
+    x1, y1 = boxes[..., 0].max(axis=1), boxes[..., 1].max(axis=1)
+    read = list(read)
+    for i, (text, score, _) in enumerate(read):
+        if not _DATE_LABEL.search(text) or _WRITTEN_DATE.search(text):
+            continue
+        h = y1[i] - y0[i]
+        row, end = [i], x1[i]
+        for j in sorted((j for j in range(len(read)) if x0[j] >= x1[i] - 2 and read[j][0].strip()
+                         and min(y1[i], y1[j]) - max(y0[i], y0[j]) > 0.4 * min(h, y1[j] - y0[j])),
+                        key=lambda j: x0[j]):
+            if x0[j] - end > 3 * h:
+                break
+            row.append(j)
+            end = max(end, x1[j])
+        pieces = " ".join(read[j][0] for j in row)
+        if len(row) < 2 or _WRITTEN_DATE.search(pieces):
+            continue
+        top, bottom = max(0, int(min(y0[j] for j in row)) - 2), int(np.ceil(max(y1[j] for j in row))) + 2
+        left, right = int(x0[i]), min(img.shape[1], int(np.ceil(end)) + 2)
+        span = np.ascontiguousarray(img[top:bottom, left:right])
+        again = _recognize(hand, [span], word_boxes=True)[0]
+        if again[1] < 0.85 or not _WRITTEN_DATE.search(again[0]):
+            continue
+        quad = np.array([[left, top], [right, top], [right, bottom], [left, bottom]], dtype=np.float32)
+        boxes = boxes.copy()
+        boxes[i] = quad
+        crops = list(crops)
+        crops[i] = span
+        read[i] = again
+        for j in row[1:]:
+            read[j] = ("", 0.0, None)  # read as part of the date line
+    return boxes, crops, read
 
 
 SPLIT_GAP_MIN = 5    # model columns between two letters (the library itself splits words above 5)

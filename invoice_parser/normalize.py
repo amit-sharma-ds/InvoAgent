@@ -377,4 +377,8 @@ def fix_item_words(text):
                 start = low.find(a, start + 1)
         return word
 
+    text = re.sub(r"\b[Aa][l1I|][cC]\b", "A/c", text)  # 'Split Alc': A/c (air conditioner)
+    text = re.sub(r"\b[QZqz](?=\s?(?:TN|Ton|TR)\b)", "2", text)  # 'QTN': a handwritten 2 before the tonnage
+    text = re.sub(r"(?<=\d\.)[Ss](?=\s?TN)", "5", text)  # '1.STN': 1.5TN
+    text = re.sub(r"(\d(?:\.\d)?\s?TN)(?=[A-Z]{2,}\b)", r"\1 ", text)  # '1.5TNSAC': 1.5TN SAC
     return re.sub(r"[A-Za-z0-9]+", fix, text)

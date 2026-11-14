@@ -16,6 +16,7 @@ class Cell:
     text: str
     x0: float  # left edge, 0..1 of page width
     x1: float  # right edge
+    words: list = field(default_factory=list, repr=False)  # (text, x0, x1) of its words
 
 
 @dataclass
@@ -155,7 +156,8 @@ def build_lines(pages):
                 cell_words.append([b])
             else:
                 cell_words[-1].append(b)
-        cells = [Cell(" ".join(w.text for w in ws), ws[0].x0, ws[-1].x1) for ws in cell_words]
+        cells = [Cell(" ".join(w.text for w in ws), ws[0].x0, ws[-1].x1, [(w.text, w.x0, w.x1) for w in ws])
+                 for ws in cell_words]
         y0 = min(w.y0 for w in words)
         y1 = max(w.y1 for w in words)
         conf = sum(w.conf for w in words) / len(words)

@@ -254,3 +254,43 @@ def test_digits_read_as_look_alike_letters():
     assert _lookalike_amount("SO") is None and _lookalike_amount("Add : CGST") is None
     assert parse_party(["amo: Kavya Infotech"])["name"] == "Kavya Infotech"
     assert parse_party(["Shri: Ram Traders"])["name"] == "Shri: Ram Traders"
+
+
+def test_handwritten_item_row_under_a_two_row_header(matcher):
+    """'AMOUNT' printed above 'Rs. | P.'; the row written close together runs across columns
+    ('8414 7nos 1986.0 13902.1'), the quantity circled ('①' read as '0'), the rate with a stroke ('42,288-14')."""
+    words = (_row(0.05, ("Invoice No. :", 0.03), ("21", 0.20))
+             + _row(0.396, ("AMOUNT", 0.83))
+             + _row(0.41, ("S.No.", 0.03), ("DESCRIPTION OF GOODS", 0.12), ("HSN CODE", 0.46), ("QTY.", 0.60),
+                    ("Rate", 0.70), ("Rs.", 0.81), ("P.", 0.93))
+             + _row(0.44, ("1", 0.04), ("Carrier 2TN SAC", 0.12), ("8415", 0.46), ("0", 0.62),
+                    ("42,288-14", 0.68), ("42288", 0.81), ("14", 0.93))
+             + _row(0.47, ("2", 0.04), ("Ceiling Fan", 0.12))
+             + [Word(t, a, 0.47, b, 0.486, 0.9, 0) for t, a, b in  # large handwriting, one cell
+                (("8414", 0.47, 0.53), ("7nos", 0.545, 0.62), ("1986.0", 0.635, 0.75), ("13902.1", 0.765, 0.90))]
+             + _row(0.495, ("Royal Breeze", 0.12))
+             + _row(0.70, ("Total Amount Before Tax", 0.57), ("56190.24", 0.81)))
+    result = extract_invoice(build_lines([Page(0, words, "ocr", 0.9)]), matcher)
+    items = [(i["description"], i["quantity"], i["unit_price"], i["amount"]) for i in result["line_items"]]
+    assert items == [("Carrier 2TN SAC", 1, 42288.14, 42288.14), ("Ceiling Fan Royal Breeze", 7, 1986.0, 13902.1)]
+
+
+def test_short_item_header_and_numbers_written_by_hand(matcher):
+    words = (_row(0.03, ("INVOICE", 0.75))
+             + _row(0.06, ("No.02857", 0.78))
+             + _row(0.08, ("Date:", 0.60), ("992026", 0.70))
+             + _row(0.40, ("DESCRIPTION", 0.06), ("AMOUNT (£)", 0.80))
+             + _row(0.43, ("Hang 2 internal doors", 0.06), ("180.00", 0.82))
+             + _row(0.46, ("Materials", 0.06), ("64.00", 0.83))
+             + _row(0.60, ("SUBTOTAL", 0.55), ("244.00", 0.82))
+             + _row(0.64, ("Total", 0.55), ("244-", 0.82)))
+    got, result = _fields(words, matcher)
+    assert got["invoice_number"] == "02857" and got["invoice_date"] == "2026-09-09"
+    assert got["total"] == 244.0
+    assert [(i["description"], i["amount"]) for i in result["line_items"]] == [
+        ("Hang 2 internal doors", 180.0), ("Materials", 64.0)]
+
+
+def test_description_look_alikes():
+    assert nz.fix_item_words("Carrier 1.STNSAC") == "Carrier 1.5TN SAC"
+    assert nz.fix_item_words("Carrier QTN Split Alc") == "Carrier 2TN Split A/c"
