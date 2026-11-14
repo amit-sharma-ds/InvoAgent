@@ -277,3 +277,46 @@
     });
   }
 })();
+
+// Photos are made smaller in the browser before they are sent: at most 3000 px, a little more than the app reads
+// them at, so nothing is lost for the extraction. A 3-5 MB phone photo becomes about 0.5 MB, which
+// uploads several times faster on a mobile connection. PDFs, ZIPs, TIFFs and images that are already
+// small are sent as they are; if anything goes wrong the original files are sent.
+(function () {
+  const MAX_SIDE = 3000, QUALITY = 0.92, SMALL_BYTES = 1200 * 1024;
+
+  async function shrink(file) {
+    if (!/^image\/(jpeg|png|webp|bmp)$/i.test(file.type) || !window.createImageBitmap) return file;
+    const bmp = await createImageBitmap(file, { imageOrientation: "from-image" });  // upright, as the phone shows it
+    const scale = Math.min(1, MAX_SIDE / Math.max(bmp.width, bmp.height));
+    if (scale === 1 && file.size <= SMALL_BYTES) { if (bmp.close) bmp.close(); return file; }
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bmp.width * scale);
+    canvas.height = Math.round(bmp.height * scale);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff";  // a transparent screenshot gets a white page, not a black one
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+    if (bmp.close) bmp.close();
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", QUALITY));
+    if (!blob || blob.size >= file.size) return file;
+    return new File([blob], file.name.replace(/\.[^./]+$/, "") + ".jpg", { type: "image/jpeg", lastModified: file.lastModified });
+  }
+  window.invoagentShrinkPhoto = shrink;  // used by the tests in the browser
+
+  document.addEventListener("submit", async (e) => {
+    const form = e.target;
+    const inputs = form.querySelectorAll('input[type="file"]');
+    if (!inputs.length || form.dataset.shrunk || typeof DataTransfer === "undefined") return;
+    e.preventDefault();
+    try {
+      for (const input of inputs) {
+        const dt = new DataTransfer();
+        for (const f of input.files) dt.items.add(await shrink(f).catch(() => f));
+        input.files = dt.files;
+      }
+    } catch (err) { /* send the files as they are */ }
+    form.dataset.shrunk = "1";
+    form.submit();  // does not fire 'submit' again
+  }, true);
+})();

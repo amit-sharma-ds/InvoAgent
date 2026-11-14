@@ -30,7 +30,7 @@ to finished result, one invoice at a time:
 | **Digital PDF** (Tally or other accounting export, an emailed PDF: it has a text layer) | **under 1 s** (about 0.03 s each in bulk) |
 | **Scanned PDF** (office scanner, a phone's *scan document* PDF: no text layer) | about **4-6 s** per page (was 13 s) |
 | **Image file** PNG / JPG / JPEG / TIFF / BMP / WEBP (a scan, a screenshot) | about **4-6 s** per page (was 18 s) |
-| **Phone photo** (browser camera on the *Phone camera* tab, or a photo from the gallery) | about **3-5 s** (a SuperStore-style page ~3 s, a dense Tally GST page ~4-5 s); sideways about 5 s; upside down about 7 s |
+| **Phone photo** (browser camera on the *Phone camera* tab, or a photo from the gallery) | about **3-5 s** plus the upload (a SuperStore-style page ~3 s, a dense Tally GST page ~4-5 s); sideways about 5 s; upside down about 7 s |
 | **Bill-book form filled in by hand** (photo or scan) | about **6-9 s** |
 
 - Photos, scans and scanned PDFs are read by a small neural OCR model (PaddleOCR PP-OCRv6 tiny on ONNX
@@ -38,6 +38,11 @@ to finished result, one invoice at a time:
   more fields right (40 of 40 instead of 35 of 40); on scans it is 3-4x faster with the same accuracy (synthetic
   set 672 of 672 fields, katanaml 282 of 284 and 526 of 528, exactly as with Tesseract). Tesseract is kept only as
   a fallback. Pages written by hand get a second, larger model (see *Forms filled in by hand*).
+- Before uploading, the browser makes a photo at most 3000 px (JPEG, quality 92): a 12 MP phone photo goes from
+  about 1.8-5 MB to about 0.6 MB, which uploads several times faster on a mobile connection. The app reads
+  photos at 2600 px, so nothing is lost: the Tally photos (90/90) and SuperStore photos (132/132) read the same
+  from these copies (2600 px lost one SuperStore field, so 3000 is used). PDFs, ZIPs, TIFFs and small images are
+  sent as they are.
 - The file type does not change the speed: a PNG and a JPG of the same page take the same time. The number of
   pixels and the amount of text do.
 - All times above were measured while another program on this PC used 30-90% of the CPU; on a free PC they
