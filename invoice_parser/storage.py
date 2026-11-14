@@ -138,13 +138,52 @@ INVOICE_COLUMNS = [
 ]
 
 
+def _most_common_names(pairs):
+    counts = {}
+    for tax_id, name in pairs:
+        counts.setdefault(tax_id, {}).setdefault(name, 0)
+        counts[tax_id][name] += 1
+    return {t: max(names, key=names.get) for t, names in counts.items()}
+
+
+def known_party_names(result, store, warnings_key="warnings"):
+    """A party name misread in handwriting ('Kavya Infotach') is replaced by the name approved before for
+    the same GSTIN ('Kavya Infotech'), when the GSTIN passes its check digit and the two names are alike
+    (so a misread GSTIN of another firm never renames a party). The change is listed in the warnings."""
+    from rapidfuzz import fuzz
+
+    fields = result.get("fields") or {}
+    parties = [(k, (fields.get(k) or {}).get("value") or {}) for k in ("seller", "buyer")]
+    ids = [p.get("tax_id") for _, p in parties if p.get("tax_id") and nz.GSTIN_RE.fullmatch(p["tax_id"])
+           and nz.gstin_checksum_ok(p["tax_id"])]
+    if not ids:
+        return
+    known = store.approved_party_names(ids)
+    for key, party in parties:
+        name, approved = party.get("name"), known.get(party.get("tax_id"))
+        if not name or not approved or name.lower() == approved.lower():
+            continue
+        if fuzz.ratio(name.lower(), approved.lower()) >= 60:
+            party["name"] = approved
+            result.setdefault(warnings_key, []).append(
+                f"{key.capitalize()} name was read as '{name}' and set to '{approved}', the name approved before "
+                f"for GSTIN {party['tax_id']}.")
+
+
 def open_store():
     """The invoice store of this installation: MongoDB when MONGODB_URI is set (data shared by every
     computer and the server, nothing lost on a restart), else SQLite in data/live."""
     if config.MONGODB_URI:
         from .mongo_store import MongoInvoiceStore
 
-        return MongoInvoiceStore()
+        try:
+            return MongoInvoiceStore()
+        except Exception as exc:  # a wrong password or a blocked network must not take the site down
+            import logging
+
+            config.MONGODB_ERROR = f"{type(exc).__name__}: {str(exc)[:200]}"
+            logging.getLogger(__name__).error("MongoDB is not reachable (%s); using local SQLite storage",
+                                              config.MONGODB_ERROR)
     return InvoiceStore.for_workspace("live")
 
 
@@ -187,7 +226,7 @@ def corrections(row, values):
 
 
 def invoice_key(number):
-    """'DPNP/2026-27/007' and 'DPNP 2026 27 007' compare equal."""
+    """'KVIN/2026-27/007' and 'KVIN 2026 27 007' compare equal."""
     return re.sub(r"[^A-Z0-9]", "", (number or "").upper()) or None
 ITEM_COLUMNS = ["invoice_id", "invoice_number", "seller_name", "currency", "line_no", "description",
                 "quantity", "unit_price", "amount"]
@@ -468,6 +507,20 @@ class InvoiceStore:
                 "SELECT li.invoice_id, i.invoice_number, i.seller_name, i.currency, li.line_no, li.description,"
                 " li.quantity, li.unit_price, li.amount FROM line_items li JOIN invoices i ON i.id = li.invoice_id"
                 f"{where} ORDER BY li.invoice_id, li.line_no", args)]
+
+    def approved_party_names(self, tax_ids):
+        """{GSTIN / tax ID: the name most often approved for it} from approved invoices (either party)."""
+        ids = sorted({t for t in tax_ids if t})
+        if not ids:
+            return {}
+        marks = ",".join("?" * len(ids))
+        with self._db() as con:
+            rows = con.execute(
+                f"SELECT seller_tax_id AS t, seller_name AS n FROM invoices WHERE review_status = 'approved'"
+                f" AND seller_tax_id IN ({marks}) AND seller_name IS NOT NULL UNION ALL"
+                f" SELECT buyer_tax_id, buyer_name FROM invoices WHERE review_status = 'approved'"
+                f" AND buyer_tax_id IN ({marks}) AND buyer_name IS NOT NULL", ids + ids).fetchall()
+        return _most_common_names((r["t"], r["n"]) for r in rows)
 
     def batch_summary(self, batch_id):
         members = "id IN (SELECT invoice_id FROM batch_members WHERE batch_id = ?)"

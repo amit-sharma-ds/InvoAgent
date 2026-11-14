@@ -108,7 +108,7 @@ being processed at that moment is not deleted.
    - **GSTIN check digit** for seller and buyer (OCR mistakes such as `O`/`0` are repaired only when the check digit then fits),
    - **CGST = SGST**, and CGST+SGST for the same state vs IGST for different states (first two GSTIN digits),
    - **duplicate invoice**: the same invoice number from the same seller (same GSTIN, or same name) already
-     exists, even as a different file or photo (`DPNP/2026-27/007` and `DPNP 2026 27 007` count as equal).
+     exists, even as a different file or photo (`KVIN/2026-27/007` and `KVIN 2026 27 007` count as equal).
      The exact same file is never processed twice (SHA-256).
 4. **Review**: anything doubtful goes to the **Review queue**. On the invoice page a reviewer can **correct any
    value** (the change is saved to the database, the Data sheet and the exports, marked "corrected by reviewer"),
@@ -607,7 +607,7 @@ Real invoices often leave out the labels a parser would look for. These cases ar
 | On the invoice | How it is read |
 |---|---|
 | Seller printed only as a name at the top (`SuperStore`), no "Seller:" label | Letterhead rule: a short name above the first label on page 1 (flagged "please check") |
-| Seller only in `for Deepnap Softech / Authorised Signatory` | Signature-block rule |
+| Seller only in `for Kavya Infotech / Authorised Signatory` | Signature-block rule |
 | Seller only identified by the first GSTIN block | Tax-ID block rule |
 | `INVOICE` with `# 5873` under it | A bare `#` near the top is the invoice number |
 | `Bill To` / `Ship To` side by side, `Ship Mode: Standard Class` on the right at the same height | Each party block is read by x-position under its own heading, so neighbouring columns never mix |
@@ -639,8 +639,8 @@ the circled quantity '①' as 1). Then:
 | `Name :`, `M/s.`, `No.`, `Party GST No.` | Buyer, buyer, invoice number, buyer's GSTIN (`No.` and `Name` only as labels of their own, never the end of `A/c No.` or `Bank Name`) |
 | Value written right of and below its label, date in boxes `11 \| 09 \| 2026` | Read |
 | Amount in words over two lines, between the tax rows on the right | Read as one amount and checked against the total |
-| GSTIN written with an `x` or a round letter read as `0` (`06BMxPS9096032B`) | Repaired with the GSTIN check digit: 06BMXPS9096Q3ZB |
-| Words written without a space (`DEEPAKSHARMA`) | Split where the gap between letters is wide |
+| GSTIN written with an `x` or a round letter read as `0` (`06BKxPT4822032Y`) | Repaired with the GSTIN check digit: 06BKXPT4822Q3ZY |
+| Words written without a space (`SURESHMITTAL`) | Split where the gap between letters is wide |
 | A grand total in whole rupees within a rupee of subtotal + tax | Round-off, not a misread |
 | The form's printed border on a scan | Not taken for the page edge, so the header (seller, GSTIN) is kept |
 

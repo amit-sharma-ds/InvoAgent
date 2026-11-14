@@ -12,6 +12,7 @@ import time
 
 from . import config
 from .pipeline import get_parser
+from .storage import known_party_names
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +71,11 @@ class BatchWorker:
             data = self.store.file_path(job).read_bytes()
             result = self.parser.parse_bytes(job["file_name"], data)
             result["invoice_id"] = job["id"]
+            if hasattr(self.store, "approved_party_names"):
+                try:  # a misread party name -> the name approved before for its GSTIN
+                    known_party_names(result, self.store)
+                except Exception:
+                    log.exception("Could not look up known party names")
             self.store.save_result(job["id"], result, int((time.perf_counter() - started) * 1000))
             return result
         except Exception as exc:

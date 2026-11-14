@@ -67,12 +67,12 @@ _NUMERIC_ROLES = ("quantity", "unit_price", "amount", "gross")
 _TAX_COMPONENT_RE = re.compile(r"(?i)\b(cgst|sgst|igst|utgst)\b")
 _IN_WORDS_RE = re.compile(r"(?i)\bin\s*words?")
 _LABEL_CELL_RE = re.compile(r"^\s*[A-Za-z][A-Za-z .&/()'-]{1,30}:")  # "State : UP": a label with its value
-# "M/s." / "M/S :" / "Messrs." starting a cell: the buyer's name follows (the letterhead's "M/S YASH
+# "M/s." / "M/S :" / "Messrs." starting a cell: the buyer's name follows (the letterhead's "M/S OM
 # TRADERS" has no full stop or colon after M/S, so it is not taken)
 _MESSRS_RE = re.compile(r"(?i)^\s*(?:m\s*/\s*s|messrs)\s*[.:][\s.:_…-]*(.*)$")
 # very short labels that are only trusted with a colon (OCR noise often produces "po", "to" ...)
 _NON_COLON_SKIP = {"po"}
-# "for Deepnap Softech" printed above "Authorised Signatory"
+# "for Kavya Infotech" printed above "Authorised Signatory"
 _SIGNATURE_RE = re.compile(r"(?i)^\s*for\s+(?:and\s+on\s+behalf\s+of\s+)?(.{3,80}?)\s*[.:]?\s*$")
 
 
@@ -209,7 +209,7 @@ def collect_candidates(lines, matcher, skip_lines=()):
             # ("Invoice No. | State : UP / State Code : 09": the 09 is the state code's)
             next_value = "" if (not nxt or _starts_with_label(nxt, matcher) or _LABEL_CELL_RE.match(nxt)) else nxt
             ms = _MESSRS_RE.match(cell)
-            if ms:  # "M/s. ...... DEEPAK SHARMA": the party billed (a bill book's buyer line)
+            if ms:  # "M/s. ...... SURESH MITTAL": the party billed (a bill book's buyer line)
                 value = ms.group(1).strip(" ._:-…") or next_value
                 add(Match("buyer", 1.0, "exact", "m s"), "M/s.", value, ln, k, True)
                 continue
@@ -246,7 +246,7 @@ def collect_candidates(lines, matcher, skip_lines=()):
                         if mt.field in TOTAL_FIELDS:  # "Total | 1 NOS | 2,95,000.00": the amount ends the row
                             value = " ".join([rest] + cells[k + 1:]).strip()
                         elif mt.field in PARTY_FIELDS and not re.search(r"[A-Za-z]{2,}", next_value):
-                            # "Buyer (Bill to) | 8600020310": a number in the next box belongs to that box
+                            # "Buyer (Bill to) | 4500012345": a number in the next box belongs to that box
                             # (e.g. the PO number); the party itself is written below its heading
                             value = rest
                         else:
@@ -339,7 +339,7 @@ _QTY_UNIT_RE = re.compile(r"(?i)(?<![\w.,])\d[\d,.]*\s*(?:nos|no|pcs|pc|pieces?|
                           r"|mtrs?|meters?|sets?|boxes|box|bags?|pairs?|dozens?|each)\b\.?")
 
 
-# a number after a phone label: "Mob.:8535000042", "Ph: 0129-2234567", "Contact : 98711 82389"
+# a number after a phone label: "Mob.:9000012345", "Ph: 0129-2234567", "Contact : 98711 82389"
 _PHONE_NUMBER_RE = re.compile(r"(?i)\b(?:mob|mobile|ph|phone|tel|telephone|cell|contact|fax|whatsapp)\b\.?"
                               r"\s*(?:no\.?)?\s*[:\-]?\s*\+?\d[\d\s\-/,]{5,}")
 
@@ -435,7 +435,7 @@ def _parse_value(c, lines, label_lines, kind, day_first, text, penalty, last=Tru
             value = nz.find_date(joined, day_first) if joined != text else None
     elif kind == "amount":
         text = _QTY_UNIT_RE.sub(" ", text)  # "Total | 1 NOS | 2,95,000.00": the quantity is not money
-        text = _PHONE_NUMBER_RE.sub(" ", text)  # "Tax Invoice  Mob.:8535000042": a phone number is not money
+        text = _PHONE_NUMBER_RE.sub(" ", text)  # "Tax Invoice  Mob.:9000012345": a phone number is not money
         value = _cell_number(text)
         if value is None:
             value = _last_amount(text)
@@ -514,6 +514,9 @@ def _tax(cands, lines, label_lines, label_cells=frozenset()):
 
 
 # --- parties ---------------------------------------------------------------------------
+_LABEL_TAILS = {"name", "ame", "me", "nam", "m/s", "ms", "/s", "s", "to", "buyer", "uyer", "yer", "party", "arty"}
+
+
 def parse_party(block):
     text = "\n".join(block)
     name = re.split(r"(?i)\s*\b(?:GSTIN|GST|VAT|TIN|PAN|Tax\s*ID|Email|E-mail|Phone|Ph|Tel|Mobile|Mob)\b"
@@ -533,6 +536,10 @@ def parse_party(block):
                    "", s).strip(" ,;|:")
         if s:
             address.append(s)
+    # the end of a label cut off by the page edge or a punch hole: 'ame: Kavya Infotech' ('Name:')
+    cut = re.match(r"\s*([A-Za-z/.]{1,6})\s*[:;]\s*(\S.*)$", name)
+    if cut and cut.group(1).lower().strip("./") in _LABEL_TAILS:
+        name = cut.group(2)
     return {
         "name": re.sub(r"\s+", " ", name).strip(" ,;|:-_~/\\") or None,
         "address": ", ".join(address) or None,
@@ -678,13 +685,13 @@ def _column_block(lines, start, anchor, label_cells, max_lines=8):
 
 
 def _looks_like_name(name):
-    """A party name has a word of 3+ letters and is not a tax ID or a bare number ('O6AABCL3501H1Z0')."""
+    """A party name has a word of 3+ letters and is not a tax ID or a bare number ('O6AABCS7788K1ZP')."""
     if not name or not re.search(r"[A-Za-z]{3,}", name):
         return False
     if not nz.find_gstin(name):
         return True
     # with a GSTIN in it, a word of the name must remain besides the ID and its label: a photo cut the
-    # 'G' off 'GSTIN:09DFIPA7756B1ZH', and 'STIN' was taken for a seller's name
+    # 'G' off 'GSTIN:09AGHPR3344C1ZG', and 'STIN' was taken for a seller's name
     words = [t for t in re.findall(r"[A-Za-z0-9]+", name) if not re.search(r"\d", t)]
     return any(len(t) >= 3 and t.upper() not in _ID_LABEL_WORDS for t in words)
 
@@ -693,7 +700,7 @@ _ID_LABEL_WORDS = {"GSTIN", "STIN", "GST", "GSTN", "UIN", "TIN", "PAN", "VAT", "
 
 
 def _seller_from_signature(lines, label_cells):
-    """'for Deepnap Softech' above 'Authorised Signatory' names the seller on most Indian invoices.
+    """'for Kavya Infotech' above 'Authorised Signatory' names the seller on most Indian invoices.
     The same name near the top of page 1 gives the address and GSTIN."""
     for i in range(len(lines) - 1, -1, -1):
         if not any(re.search(r"(?i)authori[sz]ed|signator", lines[j].text) for j in range(i, min(len(lines), i + 4))):
@@ -817,7 +824,7 @@ def _seller_from_tax_id(lines, skip=None):
 
 def _header_gstin(lines, seller_name, skip=None):
     """The GSTIN printed in the header around an inferred seller's name (bill books print
-    'GSTIN : 09DFIPA7756B1ZH' above or beside the firm's name): on page 1, at most two lines below
+    'GSTIN : 09AGHPR3344C1ZG' above or beside the firm's name): on page 1, at most two lines below
     the name, in the top third of the page. The buyer's GSTIN (skip) is passed over."""
     name = re.sub(r"\s+", " ", seller_name or "").lower()
     seller_at = next((ln.index for ln in lines[:12] if ln.page == 0 and len(name) >= 3
@@ -1105,6 +1112,17 @@ def _reconcile_amounts(fields, items, words_total, warnings, figures=frozenset()
 
     tax = fields.get("tax")
     comps = (tax or {}).get("components") or {}
+    if "CGST" in comps and "SGST" in comps and int(comps["CGST"]) == int(comps["SGST"]) != 0:
+        # CGST and SGST are always equal: when the paise of one were not readable (handwritten
+        # '3805 = 93' read as '3805'), the one with paise gives both
+        whole = [k for k in ("CGST", "SGST") if comps[k] == int(comps[k])]
+        if len(whole) == 1:
+            wrong, right = whole[0], "SGST" if whole[0] == "CGST" else "CGST"
+            warnings.append(f"{wrong} was read as {comps[wrong]:,.2f}; the paise were not readable and "
+                            f"{comps[right]:,.2f} was taken from {right} (they are always equal). Please check.")
+            comps[wrong] = comps[right]
+            tax["value"] = round(sum(comps.values()), 2)
+            tax["confidence"] = round(0.9 * min(tax.get("confidence") or 0.9, 0.9), 3)
     if (tot is not None and base is not None and "CGST" in comps and "SGST" in comps
             and abs(comps["CGST"] - comps["SGST"]) > 0.05
             and (_one_digit_apart(comps["CGST"], comps["SGST"])
@@ -1129,6 +1147,15 @@ def _reconcile_amounts(fields, items, words_total, warnings, figures=frozenset()
             _correct(tax, expected, "total - subtotal gives this tax", warnings, "Tax")
 
     tax_value = _amount_of(fields, "tax")
+    if (sub is not None and sub == int(sub) and total_confirmed and tax_value is not None
+            and tax_value != int(tax_value)):
+        # the subtotal's paise were not readable (handwritten in their own box): the total, confirmed by
+        # the amount in words, minus the tax gives the same rupees with the paise
+        expected = round(tot - tax_value - ship + disc, 2)
+        if int(expected) == int(sub) and 0 < expected - sub < 1:
+            _correct(fields["subtotal"], expected, "its paise were not readable; total (confirmed by the amount "
+                     "in words) - tax gives this", warnings, "Subtotal")
+            sub = expected
     if (sub is not None and item_sum is not None and tot is not None and tax_value is not None
             and abs(sub - item_sum) > 0.05):
         expected = round(tot - tax_value - ship + disc, 2)
@@ -1226,6 +1253,8 @@ def extract_invoice(lines, matcher):
                                "source_text": "", "page": None} if iso else None)
 
     items, has_table = _line_items(lines, totals_lines)
+    for item in items:  # 'Carrler' -> 'Carrier' (look-alike letters in handwriting)
+        item["description"] = nz.fix_item_words(item.get("description"))
     # every amount printed on the invoice (figures, not words)
     figures = {v for v in (nz.parse_amount(m.group(0)) for m in nz.AMOUNT_RE.finditer(nz.strip_dates(full_text)))
                if v is not None}

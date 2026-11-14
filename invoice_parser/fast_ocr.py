@@ -291,14 +291,14 @@ SPLIT_GAP_TIMES = 1.6  # ... and this many times the line's usual gap between le
 
 
 def _with_gaps(text, score, info):
-    """Handwriting often comes back without the space between words ('DEEPAKSHARMA', 'RAJENTERPRISES')
+    """Handwriting often comes back without the space between words ('SURESHMITTAL', 'SAIENTERPRISES')
     or with rupees and paise run together across the column line ('4228814'). A gap between two
     letters much wider than the line's usual one starts a new word: a space is put in the text and
     the character positions are grouped again, so each word gets its own box."""
     from rapidocr.ch_ppocr_rec.typings import WordType
 
     # printed lines read with confidence keep their words: a wide printed letter ('m' in a bold
-    # 'RamElectricals') leaves a gap as wide as a handwritten word space
+    # 'SunElectricals') leaves a gap as wide as a handwritten word space
     if score >= REREAD_BELOW and not any(len(t) >= 8 and re.fullmatch(r"[A-Z0-9]+", t) for t in text.split()):
         return text, score, info
     cols = [c for wc in (getattr(info, "word_cols", None) or []) for c in wc]
@@ -411,7 +411,7 @@ def _line_words(line, line_score, line_quad, parts):
 
     The recogniser's own word boxes (parts) are used for the positions, character by character: it
     sometimes returns one box per character instead of per word (a line with a full-width colon,
-    ': 06AABCL3501H1Z0', is treated as Chinese), which spaced a GSTIN out letter by letter."""
+    ': 06AABCS7788K1ZP', is treated as Chinese), which spaced a GSTIN out letter by letter."""
     line = _GLUED_DATE.sub(r"\1 \2 \3", line)
     chars = []  # (character, score, its share of its box) for every non-space character
     for text, score, quad in parts or ():

@@ -43,6 +43,7 @@ def _mongodb_uri() -> str:
 # Without it the app keeps SQLite in data/live.
 MONGODB_URI = _mongodb_uri()
 MONGODB_DB = os.environ.get("MONGODB_DB", "invoagent")
+MONGODB_ERROR = ""  # set when MONGODB_URI is given but MongoDB could not be reached at start-up
 # Original files are not stored in MongoDB once the whole cluster would pass this size (MB), so the
 # other databases on a free 512 MB Atlas cluster never run out of space. Invoice data is still saved.
 MONGODB_FILES_LIMIT_MB = int(os.environ.get("MONGODB_FILES_LIMIT_MB", "450"))

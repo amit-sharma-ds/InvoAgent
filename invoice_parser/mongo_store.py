@@ -387,6 +387,22 @@ class MongoInvoiceStore:
             counts[r["_id"]] = r["n"]
         return counts
 
+    def approved_party_names(self, tax_ids):
+        """{GSTIN / tax ID: the name most often approved for it} from approved invoices (either party)."""
+        from .storage import _most_common_names
+
+        ids = sorted({t for t in tax_ids if t})
+        if not ids:
+            return {}
+        pairs = []
+        for doc in self.invoices.find({"review_status": "approved", "$or": [
+                {"seller_tax_id": {"$in": ids}}, {"buyer_tax_id": {"$in": ids}}]},
+                {"seller_tax_id": 1, "seller_name": 1, "buyer_tax_id": 1, "buyer_name": 1}):
+            for role in ("seller", "buyer"):
+                if doc.get(f"{role}_tax_id") in ids and doc.get(f"{role}_name"):
+                    pairs.append((doc[f"{role}_tax_id"], doc[f"{role}_name"]))
+        return _most_common_names(pairs)
+
     def batch_summary(self, batch_id):
         batch = self.batches.find_one({"id": batch_id}, {"_id": 0})
         if not batch:

@@ -44,12 +44,12 @@ def test_phone_photo_is_read_by_the_fast_reader(parser, monkeypatch, turns):
     monkeypatch.setattr(ingest, "ocr_image", no_tesseract)
     result = parser.parse_bytes("IMG_20261112_101010.jpg", _camera_jpeg(turns))
     f = result["fields"]
-    assert f["invoice_number"]["value"] == "DPNP/2026-27/007"
+    assert f["invoice_number"]["value"] == "KVIN/2026-27/007"
     assert f["invoice_date"]["value"] == "2026-09-23"
-    assert f["seller"]["value"]["name"] == "Deepnap Softech"
-    assert f["seller"]["value"]["tax_id"] == "06BMXPS9096Q3ZB"
-    assert f["buyer"]["value"]["name"] == "Jay Fe Cylinders Limited"
-    assert f["buyer"]["value"]["tax_id"] == "06AABCL3501H1Z0"
+    assert f["seller"]["value"]["name"] == "Kavya Infotech"
+    assert f["seller"]["value"]["tax_id"] == "06BKXPT4822Q3ZY"
+    assert f["buyer"]["value"]["name"] == "Shakti Steel Tubes Limited"
+    assert f["buyer"]["value"]["tax_id"] == "06AABCS7788K1ZP"
     assert f["tax"]["value"] == pytest.approx(45000)
     assert f["total"]["value"] == pytest.approx(295000)
 
@@ -140,13 +140,13 @@ def _boxes(text, x0=0.0, w=10.0):
 def test_boxes_given_per_character_become_whole_words():
     """A full-width colon makes the recogniser box a GSTIN letter by letter; the words come from the
     line's own spaces, so it stays one word."""
-    line = "GSTIN ：06AABCL3501H1Z0"
-    parts = _boxes("GSTIN") + _boxes("：06AABCL3501H1Z0", x0=60)
+    line = "GSTIN ：06AABCS7788K1ZP"
+    parts = _boxes("GSTIN") + _boxes("：06AABCS7788K1ZP", x0=60)
     words = fast_ocr._line_words(line, 0.95, [[0, 0], [220, 0], [220, 20], [0, 20]], parts)
-    assert [w for w, _, _ in words] == ["GSTIN", "：06AABCL3501H1Z0"]
+    assert [w for w, _, _ in words] == ["GSTIN", "：06AABCS7788K1ZP"]
     pts = words[1][2]
     assert pts[:, 0].min() == pytest.approx(60) and pts[:, 0].max() == pytest.approx(220)
-    assert fast_ocr._clean(words[1][0]) == ":06AABCL3501H1Z0"
+    assert fast_ocr._clean(words[1][0]) == ":06AABCS7788K1ZP"
 
 
 def test_a_date_with_the_space_before_the_year_missing_is_split():
@@ -174,19 +174,19 @@ def test_rows_are_levelled_with_the_slope_at_their_own_height():
 
 
 def test_a_label_and_a_gstin_is_not_a_name():
-    assert not _looks_like_name("STIN:09DFIPA7756B1ZH")
-    assert not _looks_like_name("O6AABCL3501H1Z0")
-    assert _looks_like_name("Yash Traders GSTIN 09DFIPA7756B1ZH")
-    assert _looks_like_name("Deepnap Softech")
+    assert not _looks_like_name("STIN:09AGHPR3344C1ZG")
+    assert not _looks_like_name("O6AABCS7788K1ZP")
+    assert _looks_like_name("Om Traders GSTIN 09AGHPR3344C1ZG")
+    assert _looks_like_name("Kavya Infotech")
 
 
 def test_a_phone_number_beside_a_label_is_not_an_amount(parser):
     def layout(c):
         c.setFont("Helvetica", 10)
-        c.drawString(40, 800, "GSTIN: 09DFIPA7756B1ZH")
+        c.drawString(40, 800, "GSTIN: 09AGHPR3344C1ZG")
         c.drawString(250, 800, "Tax Invoice")
-        c.drawString(420, 800, "Mob.: 8535000042")
-        c.drawString(40, 760, "M/S YASH TRADERS")
+        c.drawString(420, 800, "Mob.: 9000012345")
+        c.drawString(40, 760, "M/S OM TRADERS")
 
     f = parser.parse_bytes("handwritten.pdf", _to_pdf(layout))["fields"]
-    assert not f.get("tax") or f["tax"]["value"] != pytest.approx(8535000042)
+    assert not f.get("tax") or f["tax"]["value"] != pytest.approx(9000012345)

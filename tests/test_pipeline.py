@@ -197,23 +197,23 @@ def _tally_layout(c, sgst="22,500.00"):
     c.setFont("Helvetica-Bold", 13)
     c.drawCentredString(300, 810, "Tax Invoice")
     c.setFont("Helvetica-Bold", 10)
-    c.drawString(40, 785, "Deepnap Softech")
+    c.drawString(40, 785, "Kavya Infotech")
     c.setFont("Helvetica", 9)
     c.drawString(40, 772, "Plot 12, Sector 5, Gurugram")
-    c.drawString(40, 759, "GSTIN/UIN: 06BMXPS9096Q3ZB")
+    c.drawString(40, 759, "GSTIN/UIN: 06BKXPT4822Q3ZY")
     c.drawString(40, 746, "State Name : Haryana, Code : 06")
     for x, y, text in [(320, 785, "Invoice No."), (450, 785, "Dated"),
-                       (320, 771, "DPNP/2026-27/007"), (450, 771, "23-Sep-26"),
+                       (320, 771, "KVIN/2026-27/007"), (450, 771, "23-Sep-26"),
                        (320, 752, "Delivery Note"), (450, 752, "Mode/Terms of Payment"),
                        (320, 733, "Buyer's Order No."), (450, 733, "Dated"),
-                       (320, 719, "8600020310"), (450, 719, "15-Sep-26")]:
+                       (320, 719, "4500012345"), (450, 719, "15-Sep-26")]:
         c.drawString(x, y, text)
     c.drawString(40, 715, "Buyer (Bill to)")
     c.setFont("Helvetica-Bold", 10)
-    c.drawString(40, 702, "Jay Fe Cylinders Limited")
+    c.drawString(40, 702, "Shakti Steel Tubes Limited")
     c.setFont("Helvetica", 9)
-    c.drawString(40, 689, "Industrial Area, Bawal, Rewari")
-    c.drawString(40, 676, "GSTIN/UIN : 06AABCL3501H1Z0")
+    c.drawString(40, 689, "Industrial Area, Phase 2, Panipat")
+    c.drawString(40, 676, "GSTIN/UIN : 06AABCS7788K1ZP")
     for x, h in [(40, "Sl No."), (80, "Description of Goods"), (300, "HSN/SAC"), (370, "Quantity"),
                  (430, "Rate"), (470, "per"), (510, "Amount")]:
         c.drawString(x, 640, h)
@@ -232,20 +232,20 @@ def _tally_layout(c, sgst="22,500.00"):
     c.drawRightString(565, 560, "2,95,000.00")
     c.drawString(40, 535, "Amount Chargeable (in words)")
     c.drawString(40, 522, "INR Two Lakh Ninety Five Thousand Only")
-    c.drawRightString(565, 480, "for Deepnap Softech")
+    c.drawRightString(565, 480, "for Kavya Infotech")
     c.drawRightString(565, 450, "Authorised Signatory")
 
 
 def test_tally_gst_invoice(parser):
     result = parser.parse_bytes("tally.pdf", _to_pdf(_tally_layout))
     f = result["fields"]
-    assert f["invoice_number"]["value"] == "DPNP/2026-27/007"
+    assert f["invoice_number"]["value"] == "KVIN/2026-27/007"
     assert f["invoice_date"]["value"] == "2026-09-23"
-    assert f["po_number"]["value"] == "8600020310"
-    assert f["seller"]["value"]["name"] == "Deepnap Softech"
-    assert f["seller"]["value"]["tax_id"] == "06BMXPS9096Q3ZB"
-    assert f["buyer"]["value"]["name"] == "Jay Fe Cylinders Limited"
-    assert f["buyer"]["value"]["tax_id"] == "06AABCL3501H1Z0"
+    assert f["po_number"]["value"] == "4500012345"
+    assert f["seller"]["value"]["name"] == "Kavya Infotech"
+    assert f["seller"]["value"]["tax_id"] == "06BKXPT4822Q3ZY"
+    assert f["buyer"]["value"]["name"] == "Shakti Steel Tubes Limited"
+    assert f["buyer"]["value"]["tax_id"] == "06AABCS7788K1ZP"
     assert f["tax"]["value"] == pytest.approx(45000)
     assert f["total"]["value"] == pytest.approx(295000)
     assert f["currency"]["value"] == "INR"
@@ -431,6 +431,6 @@ def _tally_photo(turns):
 def test_sideways_and_upside_down_pictures_are_turned_upright(parser, turns):
     result = parser.parse_bytes("tally-turned.png", _tally_photo(turns))
     f = result["fields"]
-    assert f["invoice_number"]["value"] == "DPNP/2026-27/007"
-    assert f["buyer"]["value"]["name"] == "Jay Fe Cylinders Limited"
+    assert f["invoice_number"]["value"] == "KVIN/2026-27/007"
+    assert f["buyer"]["value"]["name"] == "Shakti Steel Tubes Limited"
     assert f["total"]["value"] == pytest.approx(295000)

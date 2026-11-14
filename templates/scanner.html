@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>Scanner and other devices</h1>
+  <p class="muted">Invoices can come into the app without anyone uploading them: from an office scanner that saves
+    its scans in a folder, or from any other system through the API.</p>
+</section>
+
+<section class="card">
+  <h2>1. Scan to folder (office scanner / printer)</h2>
+  <p class="muted small">Set the scanner to save each scan as a PDF or JPG in a folder on this computer (on most
+    scanners: <em>Scan to folder</em> or <em>Scan to network folder</em>). The app checks the folder every few
+    seconds, reads every new file and moves it into the folder's <code>imported</code> subfolder. The same file is
+    never added twice. Works where the app runs on the office PC.</p>
+  <form method="post" action="{{ url_for('scanner_save') }}" class="stack">
+    <label>Folder on this computer
+      <input type="text" name="folder" value="{{ folder }}" placeholder="D:\Scans\Invoices">
+    </label>
+    <label class="inline"><input type="checkbox" name="enabled" value="1" {% if enabled %}checked{% endif %}>
+      Import new files from this folder</label>
+    <button class="btn" type="submit">Save</button>
+  </form>
+  {% if folder %}
+    <p class="small">
+      {% if not folder_ok %}<span class="missing">This folder does not exist on this computer.</span>
+      {% else %}
+        Status: <strong>{{ 'on' if enabled else 'off' }}</strong> ·
+        {{ waiting }} file{{ '' if waiting == 1 else 's' }} waiting · {{ imported }} imported so far
+        {% if last %} · last import: {{ last[1] }} file{{ '' if last[1] == 1 else 's' }}{% endif %}
+        · <a href="{{ url_for('invoices') }}">see the invoices</a>
+      {% endif %}
+    </p>
+  {% endif %}
+</section>
+
+<section class="card">
+  <h2>2. Other systems and devices (API)</h2>
+  <p class="muted small">Any program or device that can send a file over HTTP (an ERP, a mobile app, a scanning
+    station) can send an invoice and get the extracted data back as JSON. Use the user name and password of an
+    InvoAgent user (HTTP Basic auth).</p>
+  <pre class="small">curl -u USER:PASSWORD -F "file=@invoice.pdf" {{ api_url }}</pre>
+  <p class="muted small">The invoice is saved like an upload and appears in the Invoices list and the Review queue.</p>
+</section>
+{% endblock %}

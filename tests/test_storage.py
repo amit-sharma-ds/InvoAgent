@@ -283,3 +283,18 @@ def test_mongodb_stops_storing_files_before_the_cluster_is_full(tmp_path):
         assert store.invoices.find_one({"id": invoice_id})["file_note"] == "not stored: database full"
     finally:
         _close(store)
+
+
+def test_open_store_falls_back_to_sqlite_when_mongodb_fails(monkeypatch):
+    """A wrong MongoDB password must not stop the app from starting."""
+    from invoice_parser import config, mongo_store, storage
+
+    def refuse(*args, **kwargs):
+        raise RuntimeError("bad auth : authentication failed")
+
+    monkeypatch.setattr(config, "MONGODB_URI", "mongodb://user:wrong@example.invalid/")
+    monkeypatch.setattr(config, "MONGODB_ERROR", "")
+    monkeypatch.setattr(mongo_store, "MongoInvoiceStore", refuse)
+    monkeypatch.setattr(storage.InvoiceStore, "for_workspace", classmethod(lambda cls, name: "sqlite store"))
+    assert storage.open_store() == "sqlite store"
+    assert "bad auth" in config.MONGODB_ERROR

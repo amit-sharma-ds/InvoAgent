@@ -33,6 +33,7 @@ from invoice_parser.camera import (DROIDCAM_PORTS, CameraError, PhoneStream, dro
                                    save_settings)
 from invoice_parser.exporting import build_xlsx, to_csv
 from invoice_parser.pipeline import get_parser
+from invoice_parser.scanner import FolderWatcher
 from invoice_parser.storage import (EDITABLE_FIELDS, EXPORT_COLUMNS, ITEM_COLUMNS, REVIEW_STATUSES, STATUSES,
                                     TABLE_COLUMNS, move_legacy_data_to_demo, open_store)
 from invoice_parser.worker import BatchWorker
@@ -72,6 +73,7 @@ except OSError as exc:
 stores = {"live": open_store()}
 workers = {"live": BatchWorker(stores["live"])}
 phone = PhoneStream()  # one shared connection to a phone camera app (DroidCam / IP Webcam)
+scan_watcher = FolderWatcher(stores["live"], workers["live"].notify, load_settings)  # scanner's folder
 
 
 # --- workspace and helpers ---------------------------------------------------------------
@@ -171,7 +173,7 @@ def inject_layout():
     if not session.get("user"):
         return {}
     return {"workspace": workspace(), "nav_stats": store().stats(), "endpoint": request.endpoint,
-            "back_url": back_url(), "current_user": session.get("user")}
+            "back_url": back_url(), "current_user": session.get("user"), "db_error": config.MONGODB_ERROR}
 
 
 @app.template_global()
@@ -541,6 +543,34 @@ def phone_find():
     return jsonify(phones=find_phones())
 
 
+# --- scanner and other devices -------------------------------------------------------------------
+@app.get("/scanner")
+def scanner():
+    saved = load_settings()
+    folder = saved.get("scan_folder", "")
+    waiting = imported = None
+    if folder and Path(folder).is_dir():
+        allowed = config.PDF_EXTENSIONS | config.IMAGE_EXTENSIONS
+        waiting = sum(1 for p in Path(folder).iterdir() if p.is_file() and p.suffix.lower() in allowed)
+        done = Path(folder) / "imported"
+        imported = sum(1 for p in done.iterdir() if p.is_file()) if done.is_dir() else 0
+    return render_template("scanner.html", folder=folder, enabled=bool(saved.get("scan_folder_on")),
+                           folder_ok=bool(folder) and Path(folder).is_dir(), waiting=waiting, imported=imported,
+                           last=scan_watcher.last_import, api_url=request.host_url.rstrip("/") + url_for("api_parse"))
+
+
+@app.post("/scanner")
+def scanner_save():
+    folder = (request.form.get("folder") or "").strip().strip('"')
+    enabled = request.form.get("enabled") == "1"
+    if enabled and not (folder and Path(folder).is_dir()):
+        return _back_to("scanner", f"Folder not found on this computer: {folder or '(empty)'}")
+    save_settings(scan_folder=folder, scan_folder_on=enabled)
+    flash("Scanner folder is on: new files are imported every few seconds." if enabled
+          else "Scanner folder is off.")
+    return redirect(url_for("scanner"))
+
+
 # --- exports -----------------------------------------------------------------------------
 def _download(data, name, mimetype):
     stem, ext = Path(name).stem, Path(name).suffix
@@ -604,7 +634,9 @@ def api_batch(batch_id):
 
 @app.get("/health")
 def health():
-    return jsonify(status="ok", label_matcher=get_parser().matcher.backend,
+    database = ("mongodb" if hasattr(stores["live"], "client")
+                else f"sqlite (MongoDB not reachable: {config.MONGODB_ERROR})" if config.MONGODB_ERROR else "sqlite")
+    return jsonify(status="ok", label_matcher=get_parser().matcher.backend, database=database,
                    workers=workers["live"].workers, queue=stores["live"].stats())
 
 
@@ -638,6 +670,7 @@ def start_background_work():
         w.start()
     if hasattr(stores["live"], "resume_uploads"):  # MongoDB: files of this computer not stored there yet
         threading.Thread(target=stores["live"].resume_uploads, daemon=True).start()
+    scan_watcher.start()  # imports from the scanner folder when one is switched on
     threading.Thread(target=lambda: get_parser().matcher.warm_up(), daemon=True).start()
     threading.Thread(target=fast_ocr.warm_up, daemon=True).start()  # phone-photo OCR models
 

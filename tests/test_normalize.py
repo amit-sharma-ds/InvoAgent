@@ -77,13 +77,13 @@ def test_detect_currency(text, iso):
 
 
 def test_gstin_checksum_and_ocr_repair():
-    assert nz.gstin_checksum_ok("06BMXPS9096Q3ZB") and nz.gstin_checksum_ok("06AABCL3501H1Z0")
+    assert nz.gstin_checksum_ok("06BKXPT4822Q3ZY") and nz.gstin_checksum_ok("06AABCS7788K1ZP")
     assert not nz.gstin_checksum_ok("27ABCDE1234F1Z5")
     assert nz.gstin_check_char("27ABCDE1234F1Z") == "0"
     # OCR read O for 0 and split the number in two: repaired, and accepted only because the checksum fits
-    assert nz.find_gstin("GSTIN/UIN: O6BMXPS9O96Q3ZB") == "06BMXPS9096Q3ZB"
-    assert nz.find_gstin("GSTIN 06AABCL3501 H1Z0") == "06AABCL3501H1Z0"
-    assert nz.find_gstin("Invoice DPNP/2026-27/007") is None
+    assert nz.find_gstin("GSTIN/UIN: O6BKXPT4822Q3ZY") == "06BKXPT4822Q3ZY"
+    assert nz.find_gstin("GSTIN 06AABCS7788 K1ZP") == "06AABCS7788K1ZP"
+    assert nz.find_gstin("Invoice KVIN/2026-27/007") is None
 
 
 @pytest.mark.parametrize("text, value", [

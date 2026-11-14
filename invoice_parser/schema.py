@@ -99,8 +99,8 @@ FIELD_BLOCKLIST = {
     "currency": set(),
 }
 
-# Short labels that are labels only on their own: "No. : 695" and "Name : Deepnap Softech", but not the
-# end of "A/c No. : 3062..." or "Bank Name : Union Bank of India".
+# Short labels that are labels only on their own: "No. : 695" and "Name : Kavya Infotech", but not the
+# end of "A/c No. : 1234..." or "Bank Name : Union Bank of India".
 ALONE_ONLY = {"no", "name", "messrs"}
 
 PARTY_FIELDS = {"seller", "buyer"}

@@ -23,6 +23,7 @@
         ('data_sheet', 'Data sheet', none),
         ('vendors', 'Vendors', none),
         ('camera', 'Phone camera', none),
+        ('scanner', 'Scanner', none),
       ] %}
       {% for key, label, count in tabs %}
         {% if key == 'review_queue' %}
@@ -50,6 +51,7 @@
           <div class="alert">{% for m in messages %}<p>{{ m }}</p>{% endfor %}</div>
         {% endif %}
       {% endwith %}
+      {% if db_error %}<div class="alert"><p>MongoDB could not be reached, so invoices are kept on this server only for now. Check MONGODB_URI.</p></div>{% endif %}
       {% block content %}{% endblock %}
     </div>
   </main>

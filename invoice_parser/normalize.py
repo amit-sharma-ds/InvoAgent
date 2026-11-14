@@ -223,12 +223,29 @@ def _words_value(tokens):
     return (total + current) if seen else None
 
 
+_AMOUNT_WORDS = list(_NUMBER_WORDS) + ["hundred"] + list(_SCALE_WORDS) + list(_FILLER_WORDS)
+
+
+def _closest_amount_word(word):
+    """A handwritten number word as OCR reads it ('feurty', 'ine', 'hhousand', 'mine') -> the number word
+    it is closest to ('fourty', 'nine', 'thousand', 'nine'), or the word unchanged."""
+    from rapidfuzz import fuzz, process
+
+    if len(word) < 3 or word in _AMOUNT_WORDS:
+        return word
+    best = process.extractOne(word, _AMOUNT_WORDS, scorer=fuzz.ratio, score_cutoff=75)
+    return best[0] if best else word
+
+
 def words_to_amount(text):
     """'INR Two Lakh Ninety Five Thousand Only' -> 295000.0 (Indian lakh / crore and Western scales);
-    '... and Fifty Paise Only' adds 0.50."""
+    '... and Fifty Paise Only' adds 0.50. Number words misread by OCR in handwriting are matched to
+    the closest number word."""
     if not text:
         return None
-    t = re.sub(r"[^a-z ]", " ", text.lower().replace("-", " "))
+    t = re.sub(r"(?<=[a-z])[.'](?=[a-z])", "", text.lower())  # 'hhou.sand': a speck inside a word
+    t = re.sub(r"[^a-z ]", " ", t.replace("-", " "))
+    t = " ".join(_closest_amount_word(w) for w in t.split())
     fraction = 0.0
     m = re.search(r"\band\s+([a-z ]+?)\s+(paise|paisa|cents?)\b", t)
     if m:
@@ -304,3 +321,60 @@ def detect_currency(text):
         if symbol in text:
             return iso
     return None
+
+
+# Words of item descriptions on Indian (trade) invoices. Handwriting read by OCR swaps look-alike letters
+# ('Carrler' for 'Carrier'); a word that is not in this list but becomes one after such a swap is
+# corrected. Names and codes are never in the list, so they are left as read.
+ITEM_WORDS = set("""
+air conditioner conditioners carrier split window inverter cassette tower ductable compressor condenser
+cooler cooling heater geyser fan fans ceiling exhaust pedestal table wall stand motor pump submersible
+switch switches socket sockets plate plates module modular board panel light lights bulb tube batten led
+lamp fitting fittings fixture wire wires cable cables flexible copper aluminium aluminum conductor core
+pipe pipes conduit bend bends elbow tee socket coupler coupling valve tap taps fitting clamp clamps
+bracket brackets screw screws bolt bolts nut nuts washer washers nail nails hinge hinges lock locks
+handle handles channel angle sheet sheets rod rods bar bars tape tapes glue paint paints primer putty
+distemper emulsion enamel thinner brush brushes roller rollers cement sand brick bricks tile tiles
+marble granite glass mirror door doors frame frames plywood board laminate wood wooden steel iron
+stainless galvanised galvanized plastic rubber pvc cpvc upvc nylon cotton paper box boxes carton
+cartons packet packets bag bags bottle bottles roll rolls piece pieces set sets pair pairs unit units
+meter meters metre metres kit kits spare spares part parts accessories accessory charges charge
+service services repair repairing installation install labour labor transport freight delivery
+loading unloading packing forwarding rent rental maintenance annual contract amc gas refill refilling
+refrigerant copper insulation stabilizer stabiliser battery batteries ups charger adapter printer
+cartridge toner ink computer laptop monitor keyboard mouse router switch network cat lan hdmi usb
+camera cctv dvr nvr hard disk drive memory card mobile phone sim recharge software license licence
+stationery register file files folder pen pens pencil marker markers stapler pins diary notebook
+chair chairs table tables almirah cabinet rack racks shelf shelves sofa bed mattress curtain blind
+water purifier filter filters dispenser bottle kettle oven microwave refrigerator fridge freezer
+washing machine dryer iron mixer grinder juicer chimney stove burner cylinder regulator hose
+generator diesel petrol oil lubricant grease coolant tyre tyres tube tubes belt belts bearing
+bearings gear gears chain sprocket filter element sensor relay contactor starter mcb mccb rccb elcb
+fuse fuses breaker isolator meter energy distribution db box enclosure earthing electrode rod strip
+royal premium deluxe super heavy duty standard regular white black grey gray silver golden blue
+""".split())
+_LOOK_ALIKE_SWAPS = (("l", "i"), ("i", "l"), ("1", "i"), ("1", "l"), ("0", "o"), ("5", "s"), ("rn", "m"),
+                     ("m", "rn"), ("vv", "w"), ("c", "e"), ("e", "c"), ("n", "u"), ("u", "n"))
+
+
+def fix_item_words(text):
+    """'Carrler 2TN SAC' -> 'Carrier 2TN SAC': a word not in ITEM_WORDS that becomes one after swapping
+    one look-alike letter (l/i, rn/m, 0/o ...) is corrected; every other word stays as read."""
+    if not text:
+        return text
+
+    def fix(m):
+        word = m.group(0)
+        low = word.lower()
+        if len(low) < 4 or low in ITEM_WORDS:
+            return word
+        for a, b in _LOOK_ALIKE_SWAPS:
+            start = low.find(a)
+            while start >= 0:
+                cand = low[:start] + b + low[start + len(a):]
+                if cand in ITEM_WORDS:
+                    return cand.upper() if word.isupper() else cand.capitalize() if word[0].isupper() else cand
+                start = low.find(a, start + 1)
+        return word
+
+    return re.sub(r"[A-Za-z0-9]+", fix, text)

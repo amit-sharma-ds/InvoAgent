@@ -92,6 +92,8 @@ def join_paise(words):
              for p in ocr if _PAISE_HEAD_RE.match(p.text) and p.x0 > r.x1 and _same_row(r, p)
              and p.x0 - r.x1 < 0.25]
     rupee_head = min(heads, key=lambda rp: rp[1].x0 - rp[0].x1)[0] if heads else None
+    if rupee_head is None:  # the small 'P.' of the header was not read: the 'Rs.' heading alone will do
+        rupee_head = next((w for w in ocr if _RUPEE_HEAD_RE.match(w.text) and w.text.lower() != "₹"), None)
 
     def ends_row(w):
         return not any(o is not w and o.x0 > w.x1 - 0.005 and _same_row(o, w) for o in words)

@@ -285,3 +285,22 @@ def test_first_user_from_server_settings(tmp_path, monkeypatch):
     monkeypatch.setenv("INVOICE_ADMIN_PASSWORD", "another-pass-2")
     assert auth.bootstrap_admin_from_env(path) is False
     assert auth.verify("boss", "long-enough-1", path)
+
+
+def test_scanner_page_and_folder_import(client, tmp_path):
+    from invoice_parser.scanner import import_folder_once
+
+    assert client.get("/scanner").status_code == 200 and "Scanner" in client.get("/").data.decode("utf-8")
+    resp = client.post("/scanner", data={"folder": str(tmp_path / "missing"), "enabled": "1"})
+    assert resp.status_code == 302 and app_module.load_settings().get("scan_folder_on") is not True
+    (tmp_path / "scan-001.pdf").write_bytes(_to_pdf(_colon_layout) + b"%scanner")
+    (tmp_path / "notes.txt").write_text("not an invoice")
+    store = app_module.stores["live"]
+    assert import_folder_once(tmp_path, store, settle=0) == 1
+    assert (tmp_path / "imported" / "scan-001.pdf").exists() and (tmp_path / "notes.txt").exists()
+    _drain_queue()
+    _, rows = store.search(q="scan-001")
+    assert rows and rows[0]["status"] == "done" and rows[0]["invoice_number"] == "INV-2024-0042"
+    assert client.post("/scanner", data={"folder": str(tmp_path), "enabled": "1"}).status_code == 302
+    assert app_module.load_settings()["scan_folder_on"] is True
+    client.post("/scanner", data={"folder": str(tmp_path)})  # switched off again
