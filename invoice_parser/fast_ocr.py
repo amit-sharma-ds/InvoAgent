@@ -169,6 +169,7 @@ def read_photo(img, page_index: int, check_upside_down: bool = False):
                 img, boxes, crops, read, conf, sure = t_img, t_boxes, t_crops, t_read, t_conf, t_sure
         if sure < HANDWRITING_BELOW:  # still poor: details written by hand
             read = [_with_gaps(text, score, info) for text, score, info in _reread(crops, read)]
+            boxes, crops, read = _fill_gaps(engine, img, boxes, crops, read)
             conf, _ = _confidence(engine, read)
         return _words(engine, img, boxes, crops, read, page_index), conf
 
@@ -284,6 +285,68 @@ def _reread(crops, read):
         if _clean(new[0]) and (new[1] >= HAND_TRUST or new[1] > read[k][1]):
             read[k] = new
     return read
+
+
+GAP_MIN = 0.5     # a gap between two words of a row, in line heights, that may hide a missed character ...
+GAP_MAX = 3.0     # ... up to this wide
+GAP_INK = 0.25    # ink across at least this share of a line height (a ruled line is narrower)
+GAP_TRUST = 0.9   # the larger model's confidence needed to keep what it read in a gap
+GAPS_PER_PAGE = 40
+_RULE_LIKE = set("1lIi|!/\\[](){}.,:;-_'\"`~")  # what a ruled line or a dot leader reads as
+
+
+def _fill_gaps(engine, img, boxes, crops, read):
+    """Handwriting the line finder missed between two words of a row is read on its own: a date
+    written in the boxes of a form, '12 | 9 | 26', came back as '12' and '26' without the '9'.
+    A gap is read only when it holds ink wider than a ruled line, and the larger model's reading is
+    kept only when it is sure of a letter or digit that a ruled line does not look like ('1', 'l')."""
+    hand = _hand_reader()
+    if hand is None or len(boxes) < 2:
+        return boxes, crops, read
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    x0, y0 = boxes[..., 0].min(axis=1), boxes[..., 1].min(axis=1)
+    x1, y1 = boxes[..., 0].max(axis=1), boxes[..., 1].max(axis=1)
+    tall = y1 - y0
+    kept = [k for k, (t, s, _) in enumerate(read) if t.strip() and s >= engine.text_score]
+    spots = []
+    for i in kept:
+        right = [j for j in kept if x0[j] > x1[i]
+                 and min(y1[i], y1[j]) - max(y0[i], y0[j]) > 0.5 * min(tall[i], tall[j])]
+        if not right:
+            continue
+        j = min(right, key=lambda k: x0[k])
+        h = float(min(tall[i], tall[j]))
+        if not GAP_MIN * h <= x0[j] - x1[i] <= GAP_MAX * h or h < 8:
+            continue
+        top, bottom = int(min(y0[i], y0[j])), int(np.ceil(max(y1[i], y1[j])))
+        left, end = int(np.ceil(x1[i])) + 2, int(x0[j]) - 2
+        patch = gray[top:bottom, left:end]
+        if patch.size == 0 or int(patch.max()) - int(patch.min()) < 60:
+            continue  # blank paper
+        cut, _ = cv2.threshold(patch, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        core = patch[int(0.15 * patch.shape[0]): int(np.ceil(0.85 * patch.shape[0]))] < cut
+        cols = np.flatnonzero(core.sum(axis=0) >= 2)  # the band's middle: not the row's ruled lines
+        if len(cols) < GAP_INK * h:
+            continue
+        a, b = left + max(0, cols[0] - 3), left + min(patch.shape[1], cols[-1] + 4)
+        crop = img[top:bottom, a:b].copy()
+        # the form's box lines in the gap ('12 | 9 | 26') are whited out: they read as '1'
+        rule = (gray[top:bottom, a:b] < cut).mean(axis=0) >= 0.8
+        crop[:, rule] = 255
+        spots.append((np.array([[a, top], [b, top], [b, bottom], [a, bottom]], dtype=np.float32), crop))
+    if not spots:
+        return boxes, crops, read
+    spots = spots[:GAPS_PER_PAGE]
+    gap_crops = [c for _, c in spots]
+    found = _recognize(hand, gap_crops, word_boxes=True, batch_size=HAND_BATCH)
+    small = _recognize(engine.text_rec, gap_crops)  # both models must read the same
+    new = [k for k, (text, score, _) in enumerate(found)
+           if score >= GAP_TRUST and re.search(r"[A-Za-z0-9]", text) and set(text.replace(" ", "")) - _RULE_LIKE
+           and text.replace(" ", "") == small[k][0].replace(" ", "")]
+    if not new:
+        return boxes, crops, read
+    return (np.concatenate([boxes, np.stack([spots[k][0] for k in new])]), list(crops) + [gap_crops[k] for k in new],
+            list(read) + [found[k] for k in new])
 
 
 SPLIT_GAP_MIN = 5    # model columns between two letters (the library itself splits words above 5)

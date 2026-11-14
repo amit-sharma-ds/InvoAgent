@@ -683,7 +683,7 @@ if __name__ == "__main__":
     print("InvoAgent running.")
     print(f"  This PC:            http://localhost:{PORT}")
     print(f"  Phone (same Wi-Fi): http://<this-PC-IP>:{PORT}")
-    print(f"  Data:               " + (f"MongoDB database '{config.MONGODB_DB}'" if config.MONGODB_URI
+    print(f"  Data:               " + (f"MongoDB database '{config.MONGODB_DB}'" if hasattr(stores['live'], 'client')
                                        else f"{config.DATA_DIR / 'live'} (SQLite)"))
     print(f"  Worker threads:     {workers['live'].workers}")
     from waitress import serve  # production-grade WSGI server (works on Windows)

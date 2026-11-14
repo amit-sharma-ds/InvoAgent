@@ -183,3 +183,74 @@ def test_a_misread_party_name_takes_the_name_approved_for_its_gstin(tmp_path):
     assert result["fields"]["buyer"]["value"]["name"] == "Kavya Infotech"
     assert result["fields"]["seller"]["value"]["name"] == "Other Traders"  # no approved name for that GSTIN
     assert "set to 'Kavya Infotech'" in result["warnings"][0]
+
+
+def test_misread_tax_and_total_are_put_back_together_by_the_gst_rate(matcher):
+    """'380S' (CGST), '3805=' '93' (SGST, paise as a word of their own), '499l00t' (total) and the subtotal
+    without its paise: CGST = SGST = 9% of 42,288.14 and 42,288.14 + 7,611.86 = 49,900 put them right."""
+    words = (_row(0.02, ("GSTIN : 09AGHPR3344C1ZG", 0.03), ("Tax Invoice", 0.45))
+             + _row(0.05, ("M/S OM TRADERS", 0.28))
+             + _row(0.14, ("Involce No.", 0.03), ("14", 0.20), ("Date :", 0.66), ("12 9 26", 0.70))
+             + _row(0.19, ("amo: Kavya Infotech", 0.03), ("Transport Name :", 0.60))
+             + _row(0.23, ("Address :", 0.03), ("7 A, Industrial estate", 0.12), ("Vehicle No. :", 0.60))
+             + _row(0.27, ("GSTIN :", 0.03), ("06BKxPT4822Q3ZY", 0.10), ("Place of Supply :", 0.60))
+             + _row(0.32, ("S.No.", 0.03), ("DESCRIPTION OF GOODS", 0.09), ("HSN CODE", 0.46), ("QTY.", 0.58),
+                    ("Rate", 0.66), ("Rs.", 0.80), ("P.", 0.94))
+             + _row(0.36, ("1", 0.04), ("Carrier 2TN Split A/c", 0.10), ("8415", 0.47), ("1", 0.60),
+                    ("42288", 0.80))
+             + _row(0.70, ("Total Amount Before Tax", 0.57), ("42288", 0.80))
+             + _row(0.73, ("Add : CGST@ ....%", 0.57), ("380S", 0.80))
+             + _row(0.76, ("Add : SGST@ ....%", 0.57), ("3805=", 0.80), ("93", 0.87))
+             + _row(0.80, ("Round Off", 0.57))
+             + _row(0.83, ("Total Amount After Tax", 0.57), ("499l00t", 0.80)))
+    got, result = _fields(words, matcher)
+    assert got["invoice_number"] == "14" and got["invoice_date"] == "2026-09-12"
+    assert got["buyer"] == "Kavya Infotech" and got["seller"] == "M/S OM TRADERS"
+    assert (got["subtotal"], got["tax"], got["total"]) == (42288.14, 7611.86, 49900.0)
+    assert result["fields"]["tax"]["components"] == {"CGST": 3805.93, "SGST": 3805.93}
+    assert any("Total was read as 499,100.00" in w for w in result["warnings"])
+
+
+def test_gst_amounts_that_add_up_with_a_round_off_are_left_alone(matcher):
+    words = (_row(0.05, ("Invoice No. :", 0.03), ("77", 0.20))
+             + _row(0.70, ("Taxable Value", 0.57), ("1,000.40", 0.80))
+             + _row(0.73, ("CGST @ 9%", 0.57), ("90.04", 0.80))
+             + _row(0.76, ("SGST @ 9%", 0.57), ("90.04", 0.80))
+             + _row(0.79, ("Round Off", 0.57), ("-0.48", 0.80))
+             + _row(0.83, ("Grand Total", 0.57), ("1,180.00", 0.80)))
+    got, result = _fields(words, matcher)
+    assert (got["subtotal"], got["tax"], got["total"]) == (1000.40, 180.08, 1180.0)
+    assert not any("GST rate" in w or "taxable value +" in w for w in result["warnings"])
+
+
+def test_a_gap_with_handwriting_between_two_words_is_read():
+    """'12 | 9 | 26' in the boxes of a printed date: the line finder found '12' and '26' but not the '9'."""
+    import cv2
+
+    from invoice_parser import fast_ocr
+
+    if not fast_ocr.available() or fast_ocr._hand_reader() is None:
+        pytest.skip("photo OCR models not installed")
+    img = np.full((60, 400, 3), 255, np.uint8)
+    for text, x in (("12", 20), ("9", 135), ("26", 200)):
+        cv2.putText(img, text, (x, 42), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (40, 40, 40), 3)
+    for x in (110, 180):  # the form's box lines either side of the '9'
+        cv2.line(img, (x, 5), (x, 55), (90, 90, 90), 2)
+    boxes = np.array([[[15, 8], [75, 8], [75, 52], [15, 52]], [[195, 8], [255, 8], [255, 52], [195, 52]]],
+                     dtype=np.float32)
+    engine = fast_ocr._get_engine()
+    crops = engine.crop_text_regions(img, boxes)
+    read = [("12", 0.99, None), ("26", 0.99, None)]
+    boxes, crops, read = fast_ocr._fill_gaps(engine, img, boxes, crops, read)
+    assert len(read) == 3 and read[2][0].strip() == "9"
+    assert 100 <= boxes[2][0][0] and boxes[2][1][0] <= 190  # its box is the gap's ink, not the whole gap
+
+
+def test_digits_read_as_look_alike_letters():
+    from invoice_parser.extract import _lookalike_amount, parse_party
+
+    assert _lookalike_amount("380S") == 3805
+    assert _lookalike_amount("Total 499l00t") == 499100
+    assert _lookalike_amount("SO") is None and _lookalike_amount("Add : CGST") is None
+    assert parse_party(["amo: Kavya Infotech"])["name"] == "Kavya Infotech"
+    assert parse_party(["Shri: Ram Traders"])["name"] == "Shri: Ram Traders"

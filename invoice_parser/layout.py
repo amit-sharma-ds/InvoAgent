@@ -71,6 +71,7 @@ _RUPEES_RE = re.compile(r"^\d[\d,]*$")
 _PAISE_RE = re.compile(r"^\d{1,2}$")
 # "3805=93", "42288/14": rupees and paise written with a stroke between them
 _STROKE_DECIMAL_RE = re.compile(r"^(\d[\d,]*)\s*([=/:|])\s*(\d{2})$")
+_STROKE_END_RE = re.compile(r"^(\d[\d,]*)\s*=$")  # '3805=' with the paise read as a word of their own
 
 
 def _same_row(a, b):
@@ -103,8 +104,18 @@ def join_paise(words):
         if w.conf >= 1.0 or i in used:
             continue
         m = _STROKE_DECIMAL_RE.match(w.text)
+        eq = _STROKE_END_RE.match(w.text)
         if m and (m.group(2) == "=" or (rupee_head and w.x0 > rupee_head.x0 - 0.1 and ends_row(w))):
             merged[i] = Word(f"{m.group(1)}.{m.group(3)}", w.x0, w.y0, w.x1, w.y1, w.conf, w.page)
+        elif eq:  # '3805=' then '93'
+            h = w.y1 - w.y0
+            for j, p in enumerate(words):
+                if (j != i and j not in used and j not in merged and p.conf < 1.0 and re.fullmatch(r"\d{2}", p.text)
+                        and -0.2 * h <= p.x0 - w.x1 <= 2 * h and _same_row(w, p)):
+                    merged[i] = Word(f"{eq.group(1)}.{p.text}", w.x0, min(w.y0, p.y0), p.x1, max(w.y1, p.y1),
+                                     min(w.conf, p.conf), w.page)
+                    used.add(j)
+                    break
         elif (rupee_head and w.y0 > rupee_head.y1 and _RUPEES_RE.match(w.text) and len(w.text) >= 2
               and w.x1 > rupee_head.x0):
             h = w.y1 - w.y0

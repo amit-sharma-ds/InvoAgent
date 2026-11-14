@@ -18,6 +18,7 @@ import re
 from dataclasses import dataclass
 
 from rapidfuzz import fuzz
+from rapidfuzz.distance import Levenshtein
 
 from . import normalize as nz
 from .matcher import Match, normalize_label
@@ -239,7 +240,11 @@ def collect_candidates(lines, matcher, skip_lines=()):
                     if mt and normalize_label(label) == "no" and not re.match(r"[\s.:#_-]*(\d|$)",
                                                                              " ".join(words[n:])):
                         mt = None  # "No." is a label when a number (or nothing) follows, not "No. of boxes"
-                    if mt and mt.method == "exact" and not weak:  # label-only text must match exactly
+                    # a misread label on a photo ('Involce No. | 15') counts when it is the whole cell and a
+                    # number follows in the next one
+                    misread = (mt is not None and mt.method == "fuzzy" and mt.score >= 0.9 and n == len(words)
+                               and len(normalize_label(label)) >= 8 and re.search(r"\d", next_value))
+                    if mt and (mt.method == "exact" or misread) and not weak:  # label-only text must match exactly
                         rest = " ".join(words[n:])
                         if re.fullmatch(r"\(.*\)", rest):  # "Buyer (Bill to)": the brackets belong to the label
                             label, rest = f"{label} {rest}", ""
@@ -325,6 +330,21 @@ def _first_identifier(text):
         tok = tok.rstrip(".")
         if re.search(r"\d", tok) and not nz.find_date(tok) and not nz.find_gstin(tok):
             return tok  # an invoice / PO number is never a date or a GSTIN
+    return None
+
+
+_DIGIT_LOOKALIKES = str.maketrans("OoSslI|B", "00551118")
+
+
+def _lookalike_amount(text):
+    """A handwritten figure with digits read as look-alike letters: '380S' (5), '499l00t' (1, and the
+    stroke after the figure). Only tokens with 3+ real digits, read last of all."""
+    for token in reversed(text.split()):
+        if len(re.findall(r"\d", token)) < 3:
+            continue
+        fixed = re.sub(r"[A-Za-z]{1,2}$", "", token.translate(_DIGIT_LOOKALIKES))
+        if re.fullmatch(r"\d[\d,]*(\.\d{1,2})?", fixed):
+            return nz.parse_amount(fixed)
     return None
 
 
@@ -445,6 +465,8 @@ def _parse_value(c, lines, label_lines, kind, day_first, text, penalty, last=Tru
             if trimmed != text:
                 value = _cell_number(trimmed)
                 value = _last_amount(trimmed) if value is None else value
+        if value is None:
+            value = _lookalike_amount(text)
         if value is None and last:
             value, penalty = _amount_same_row(c, lines, label_lines), 0.9
     else:
@@ -538,8 +560,11 @@ def parse_party(block):
             address.append(s)
     # the end of a label cut off by the page edge or a punch hole: 'ame: Kavya Infotech' ('Name:')
     cut = re.match(r"\s*([A-Za-z/.]{1,6})\s*[:;]\s*(\S.*)$", name)
-    if cut and cut.group(1).lower().strip("./") in _LABEL_TAILS:
-        name = cut.group(2)
+    if cut:
+        tail = cut.group(1).lower().strip("./")
+        # misread as well ('amo:' for 'ame:')
+        if tail in _LABEL_TAILS or (2 < len(tail) <= 4 and max(fuzz.ratio(tail, t) for t in ("ame", "name")) >= 66):
+            name = cut.group(2)
     return {
         "name": re.sub(r"\s+", " ", name).strip(" ,;|:-_~/\\") or None,
         "address": ", ".join(address) or None,
@@ -693,7 +718,9 @@ def _looks_like_name(name):
     # with a GSTIN in it, a word of the name must remain besides the ID and its label: a photo cut the
     # 'G' off 'GSTIN:09AGHPR3344C1ZG', and 'STIN' was taken for a seller's name
     words = [t for t in re.findall(r"[A-Za-z0-9]+", name) if not re.search(r"\d", t)]
-    return any(len(t) >= 3 and t.upper() not in _ID_LABEL_WORDS for t in words)
+    # 'GSTEN:09AGHPR3344C1ZG': a misread 'GSTIN' is still the label
+    return any(len(t) >= 3 and t.upper() not in _ID_LABEL_WORDS and fuzz.ratio(t.upper(), "GSTIN") < 75
+               for t in words)
 
 
 _ID_LABEL_WORDS = {"GSTIN", "STIN", "GST", "GSTN", "UIN", "TIN", "PAN", "VAT", "NO", "NUMBER", "REG"}
@@ -844,20 +871,22 @@ def _header_gstin(lines, seller_name, skip=None):
 _BLOCK_STOP_RE = re.compile(r"(?i)\b(no|date|dated|invoice|bill|state|code|gstin|mob|mobile|phone|tel|email)\b")
 
 
-def _buyer_from_tax_id(lines, seller_tax_id):
+def _buyer_from_tax_id(lines, seller_tax_id, start=0):
     """No buyer label could be read (a bill book's 'M/s' printed small, or cut off by the photo): the
     first GSTIN on page 1 that is not the seller's belongs to the buyer, with the lines written above
     it in the same column (name, address) up to the first printed label ('No.', 'Date', ...)."""
     for i, ln in enumerate(lines[:40]):
         if ln.page != 0 or is_table_header(ln):
             break  # the parties are named above the item table
-        for cell in ln.cell_boxes:
+        for cell in ln.cell_boxes if i >= start else ():
             gstin = nz.find_gstin(cell.text)
             if not gstin or gstin == seller_tax_id:
                 continue
             block, column = [cell.text], (cell.x0 - 0.05, cell.x1)
             for above in reversed(lines[max(0, i - 5): i]):
                 texts = [c.text for c in above.cell_boxes if c.x1 > column[0] and c.x0 < column[1]]
+                if not texts:
+                    continue  # a row of the other column only ('Vehicle No.' a little higher than the address)
                 text = " ".join(texts).strip(" |_:")
                 if not text or _BLOCK_STOP_RE.search(text) or nz.find_gstin(text):
                     break
@@ -1080,7 +1109,7 @@ def _correct(field, new_value, why, warnings, name):
     warnings.append(f"{name} was read as {old:,.2f} and corrected to {new_value:,.2f}: {why}. Please check.")
 
 
-def _reconcile_amounts(fields, items, words_total, warnings, figures=frozenset()):
+def _reconcile_amounts(fields, items, words_total, warnings, figures=frozenset(), round_off=False):
     """Repair OCR misreads in the amounts using the invoice's own arithmetic.
 
     A value is changed only when (1) the other amounts on the invoice prove what it must be, and
@@ -1162,6 +1191,110 @@ def _reconcile_amounts(fields, items, words_total, warnings, figures=frozenset()
         if abs(item_sum - expected) <= 0.05 and _one_digit_apart(sub, expected):
             _correct(fields["subtotal"], expected, "the line items and total - tax both give this",
                      warnings, "Subtotal")
+    _gst_solve(fields, item_sum, words_total, warnings, round_off)
+
+
+# GST rates (CGST + SGST together, or IGST), the most common first
+GST_RATES = (0.18, 0.05, 0.12, 0.28, 0.40, 0.03, 0.015, 0.0025)
+
+
+def _subsequence(short, long):
+    rest = iter(long)
+    return all(ch in rest for ch in short)
+
+
+def _tax_support(read, want):
+    """How well a tax figure read by OCR supports the amount `want`: 3 exactly, 2 the same rupees
+    (handwritten paise not readable), 1 one digit misread, lost or added ('3808', '380' for 3805.93)."""
+    if read is None:
+        return 0
+    if abs(read - want) < 0.005:
+        return 3
+    r, w = str(int(abs(read))), str(int(abs(want)))
+    if r == w:
+        return 2
+    if len(w) >= 3 and (_one_digit_apart(int(abs(read)), int(abs(want)))
+                        or (len(r) == len(w) - 1 >= 3 and _subsequence(r, w))
+                        or (len(r) == len(w) + 1 and _subsequence(w, r))):
+        return 1
+    return 0
+
+
+def _total_garbled(read, want, base):
+    """True when a total read from handwriting cannot be right and looks like `want` with digits lost
+    or added ('9900', '900', '499100' for 49900), or is below the taxable value."""
+    if read < base:
+        return True
+    r, w = str(int(abs(read))), str(int(abs(want)))
+    return len(r) != len(w) and Levenshtein.distance(r, w) <= 2
+
+
+def _gst_solve(fields, item_sum, words_total, warnings, round_off=False):
+    """Handwritten GST bills whose amounts do not add up: CGST = SGST = taxable value x rate / 2 (or
+    IGST = taxable value x rate) at a standard GST rate, and taxable value + tax = total. The amounts
+    are put back together only when the tax figures that were read support the rate (their rupees, or
+    all but one digit, match) and the total read agrees, or cannot be right; every change is listed in
+    the warnings. Amounts that already add up are never touched."""
+    tax, sub_f, tot_f = fields.get("tax"), fields.get("subtotal"), fields.get("total")
+    comps = (tax or {}).get("components") or {}
+    if not comps or fields.get("discount") or fields.get("shipping"):
+        return
+    sub, tot = _amount_of(fields, "subtotal"), _amount_of(fields, "total")
+    if sub is not None and tot is not None and abs(sub + sum(comps.values()) - tot) <= 0.01:
+        return
+    halves = "IGST" not in comps
+    totals = [t for t in (tot, words_total) if t is not None]
+    best = None
+    for b in {v for v in (sub, item_sum) if v}:
+        for rank, rate in enumerate(GST_RATES):
+            options = {b}
+            # with a total in whole rupees (read, or the one this rate gives), the taxable value's paise
+            # follow from it: 42288 read, 49900 / 1.18 = 42288.14
+            for t in totals + [float(round(b * (1 + rate)))] if b == int(b) else ():  # only paise not read
+                if t == round(t) and t > b and int(round(t / (1 + rate), 2)) == int(b):
+                    options.add(round(t / (1 + rate), 2))
+            for base in options:
+                h = round(base * rate / 2, 2) if halves else round(base * rate, 2)
+                parts = {"CGST": h, "SGST": h} if halves else {"IGST": h}
+                support = sum(_tax_support(comps.get(k), v) for k, v in parts.items())
+                if any(comps.get(k) is not None and comps[k] >= v / 5 and not _tax_support(comps[k], v)
+                       for k, v in parts.items()):
+                    continue  # a clearly different figure was read (27,900 for 22,500): a real mismatch stays visible
+                pred = round(base + sum(parts.values()), 2)
+                agrees = any(abs(t - p) <= 1 for t in totals for p in (pred, round(pred)))
+                exact = any(abs(t - pred) <= 0.01 for t in totals)
+                if support < 2 or not (agrees and support + 3 >= 5 or support >= 4 and (
+                        tot is None or any(_total_garbled(tot, p, base) for p in (pred, round(pred))))):
+                    continue
+                key = (support + 3 * agrees + exact, base == b, -rank)
+                if best is None or key > best[0]:
+                    best = (key, base, rate, parts)
+    if best is None:
+        return
+    _, base, rate, parts = best
+    h = next(iter(parts.values()))
+    # a figure read with paise within 10 of the computed ones keeps its own (rounded down, or per line:
+    # 1251.10 for 9% of 13902.10); CGST and SGST stay equal
+    read = [comps[k] for k in parts if comps.get(k) is not None and abs(comps[k] - h) <= 0.1 and comps[k] != int(comps[k])]
+    for k in parts:
+        comps[k] = min(read, key=lambda v: abs(v - h)) if read else h
+    old_tax = tax["value"]
+    tax["value"] = round(sum(comps[k] for k in parts), 2)
+    tax["confidence"] = round(0.8 * min(tax.get("confidence") or 0.9, 0.9), 3)
+    why = (f"{'CGST and SGST' if len(parts) == 2 else 'IGST'} at {rate * 100:g}% of the taxable value "
+           f"{base:,.2f}")
+    if abs(old_tax - tax["value"]) > 0.01:
+        warnings.append(f"Tax was read as {old_tax:,.2f} and set to {tax['value']:,.2f}: {why}. Please check.")
+    if sub_f and abs(base - sub_f["value"]) > 0.01:
+        _correct(sub_f, base, "the paise follow from the total at this GST rate", warnings, "Subtotal")
+    pred = round(base + tax["value"], 2)
+    total = float(round(pred)) if round_off else pred
+    if tot_f is None:
+        fields["total"] = {"value": total, "confidence": round(0.7 * tax["confidence"], 3),
+                           "source_label": "Taxable value + tax", "source_text": "", "page": None}
+        warnings.append(f"Total could not be read; taxable value + tax gives {total:,.2f} ({why}). Please check.")
+    elif not any(abs(tot_f["value"] - p) <= 1 for p in (pred, round(pred))):
+        _correct(tot_f, total, f"taxable value + tax ({why})", warnings, "Total")
 
 
 def _amount_of(fields, key):
@@ -1215,6 +1348,9 @@ def extract_invoice(lines, matcher):
         fields["subtotal"] = _total_above_grand_total(cands, lines, label_lines, cells, fields["total"]["value"])
 
     words_total, words_line = _amount_in_words(lines)
+    sub = (fields["subtotal"] or {}).get("value")
+    if words_total and sub and words_total < sub - 1 and not fields["discount"]:
+        words_total = None  # misread handwriting ('Forty nine thousand' read as 'ine thousand'): below the subtotal
     if fields["total"] is None and words_total:
         fields["total"] = {"value": words_total, "confidence": round(0.85 * words_line.conf, 3),
                            "source_label": "Amount in words", "source_text": words_line.text,
@@ -1236,8 +1372,12 @@ def extract_invoice(lines, matcher):
             warnings.append("Seller was inferred (no 'Seller/Vendor' label): please check it.")
 
     seller_tax_id = ((fields["seller"] or {}).get("value") or {}).get("tax_id")
-    if fields["buyer"] is None and seller_tax_id:
-        found = _buyer_from_tax_id(lines, seller_tax_id)
+    seller_name = ((fields["seller"] or {}).get("value") or {}).get("name")
+    # the seller's own GSTIN unreadable ('09AGHPR3344C1Z', a letter short): the GSTINs below the seller's
+    # name are still the buyer's
+    below = next((k + 1 for k, ln in enumerate(lines[:15]) if seller_name and seller_name in ln.text), None)
+    if fields["buyer"] is None and (seller_tax_id or below):
+        found = _buyer_from_tax_id(lines, seller_tax_id, start=0 if seller_tax_id else below)
         if found:
             fields["buyer"] = found
             warnings.append("Buyer was inferred (no 'Buyer / Bill to' label): please check it.")
@@ -1258,7 +1398,8 @@ def extract_invoice(lines, matcher):
     # every amount printed on the invoice (figures, not words)
     figures = {v for v in (nz.parse_amount(m.group(0)) for m in nz.AMOUNT_RE.finditer(nz.strip_dates(full_text)))
                if v is not None}
-    _reconcile_amounts(fields, items, words_total, warnings, figures)
+    _reconcile_amounts(fields, items, words_total, warnings, figures,
+                       round_off=bool(re.search(r"(?i)\bround\s*-?\s*off\b|\br\s*/\s*off\b", full_text)))
     total, tax = _amount_of(fields, "total"), _amount_of(fields, "tax")
     if fields["subtotal"] is None and total is not None and tax is not None:
         derived = round(total - tax - (_amount_of(fields, "shipping") or 0) + (_amount_of(fields, "discount") or 0), 2)
