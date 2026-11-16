@@ -10,11 +10,19 @@
     <h2>1. Phone browser photo</h2>
     <p class="muted small">Open this page on the phone and take a photo. Full camera resolution, so this gives the
       <strong>best accuracy</strong>. No app needed.</p>
-    <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data" class="stack">
+    <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data" class="stack" id="photo-form">
       <input type="hidden" name="source" value="camera">
       <input type="file" name="files" accept="image/*" capture="environment" required>
       <button class="btn" type="submit">Take photo and extract</button>
     </form>
+    <p class="muted small">Or <strong>paste a copied picture</strong> (WhatsApp, Gallery, a screenshot): press
+      Ctrl+V on this page, or tap the box and choose Paste. It is extracted straight away.</p>
+    <div class="paste-box" id="paste-box" contenteditable="true" inputmode="none" role="textbox"
+         aria-label="Paste a copied invoice picture here" data-placeholder="Tap here, then Paste"></div>
+    <div class="actions">
+      <button class="btn secondary" type="button" id="paste-btn" hidden>Paste image</button>
+    </div>
+    <p class="small muted" id="paste-msg"></p>
   </div>
 
   <div class="card">

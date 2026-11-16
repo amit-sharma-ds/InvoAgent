@@ -320,3 +320,51 @@
     form.submit();  // does not fire 'submit' again
   }, true);
 })();
+
+// Phone camera page: a copied picture (WhatsApp, Gallery, a screenshot) can be pasted and is extracted straight away.
+(function () {
+  const form = document.getElementById("photo-form");
+  const box = document.getElementById("paste-box");
+  if (!form || !box) return;
+  const input = form.querySelector('input[type="file"]');
+  const msg = document.getElementById("paste-msg");
+  const btn = document.getElementById("paste-btn");
+  const EXT = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/bmp": "bmp", "image/tiff": "tif" };
+
+  function send(blob) {
+    if (!blob || !EXT[blob.type] || typeof DataTransfer === "undefined") return false;
+    const stamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+    const dt = new DataTransfer();
+    dt.items.add(new File([blob], `pasted-${stamp}.${EXT[blob.type]}`, { type: blob.type }));
+    input.files = dt.files;
+    box.textContent = "";
+    msg.textContent = "Picture pasted. Extracting…";
+    if (form.requestSubmit) form.requestSubmit(); else form.submit();
+    return true;
+  }
+
+  document.addEventListener("paste", (e) => {
+    const items = e.clipboardData ? Array.from(e.clipboardData.items) : [];
+    const item = items.find((it) => it.kind === "file" && EXT[it.type]);
+    if (item && send(item.getAsFile())) e.preventDefault();
+    else if (e.target === box || box.contains(e.target)) {
+      e.preventDefault();
+      msg.textContent = "No picture to paste. Copy an invoice picture first.";
+    }
+  });
+  box.addEventListener("input", () => { box.textContent = ""; });  // the box only takes pictures, not text
+
+  if (btn && navigator.clipboard && navigator.clipboard.read) {  // HTTPS pages and localhost only
+    btn.hidden = false;
+    btn.addEventListener("click", async () => {
+      try {
+        for (const item of await navigator.clipboard.read()) {
+          for (const type of item.types) if (EXT[type] && send(await item.getType(type))) return;
+        }
+        msg.textContent = "No picture copied. Copy an invoice picture first, then press Paste image.";
+      } catch (err) {
+        msg.textContent = "The browser did not allow reading the clipboard. Tap the box and choose Paste, or press Ctrl+V.";
+      }
+    });
+  }
+})();

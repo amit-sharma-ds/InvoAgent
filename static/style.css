@@ -232,6 +232,10 @@ body.no-scroll { overflow: hidden; }
 .inline-fields input[type="number"] { width: 90px; margin-left: 0; }
 button.chip { border: 0; cursor: pointer; font: inherit; font-size: 13px; }
 
+.paste-box { border: 2px dashed #c7d2fe; border-radius: 8px; padding: 18px 12px; text-align: center;
+  background: #fbfcff; color: var(--muted); min-height: 24px; outline: none; overflow: hidden; }
+.paste-box:empty::before { content: attr(data-placeholder); }
+.paste-box:focus { border-color: var(--brand); background: #eef2ff; }
 .preview { margin-top: 12px; }
 .preview img { width: 100%; border-radius: 8px; border: 1px solid var(--border); background: #000; }
 details summary { cursor: pointer; font-weight: 600; }
