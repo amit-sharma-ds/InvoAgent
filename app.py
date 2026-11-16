@@ -19,6 +19,7 @@ import os
 import socket
 import sys
 import threading
+import time
 import zipfile
 from datetime import timedelta
 from datetime import datetime
@@ -676,7 +677,13 @@ def start_background_work():
 
 
 if __name__ == "__main__":
-    if not _port_is_free(PORT):
+    # a restarted server (Render, after a crash) finds the port held for a few seconds by the old process:
+    # wait for it there instead of stopping, which made the restarts fail again and again
+    for _ in range(30 if os.environ.get("RENDER") else 1):
+        if _port_is_free(PORT):
+            break
+        time.sleep(1)
+    else:
         sys.exit(f"Port {PORT} is already used by another program. "
                  "Set INVOICE_PARSER_PORT to a free port (for example 5078) and start again.")
     start_background_work()

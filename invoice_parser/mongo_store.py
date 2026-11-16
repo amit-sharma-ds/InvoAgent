@@ -71,6 +71,23 @@ def _by_total_desc(rows):
     return sorted(rows, key=lambda r: (r["total"] is None, -(r["total"] or 0)))
 
 
+RAW_KEEP_BYTES = 3 * 2**20  # JPEGs up to this size and RAW_KEEP_SIDE px are stored as they are, not decoded
+RAW_KEEP_SIDE = 3000         # the browser makes phone photos this small before uploading them
+
+
+def _store_as_is(data: bytes, file_name: str) -> bool:
+    """A phone photo the browser already made smaller: kept as it is (only its header is read)."""
+    if len(data) > RAW_KEEP_BYTES or Path(file_name).suffix.lower() not in (".jpg", ".jpeg"):
+        return False
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as im:
+            return max(im.size) <= RAW_KEEP_SIDE
+    except Exception:
+        return False
+
+
 def compact_file(data: bytes, file_name: str):
     """(bytes, content type) to keep in the database: a photo or image as a JPEG of at most
     KEEP_SIDE px with its EXIF (camera details, rotation), when that is smaller; anything else as it is."""
@@ -164,7 +181,10 @@ class MongoInvoiceStore:
                 is_new = False
                 existing = self.invoices.find_one({"file_sha256": sha}, {"id": 1})
             else:
-                if queue:  # waits in a batch: store it now (a single upload: after it is read)
+                if queue or _store_as_is(data, file_name):
+                    # stored now, before it is read: a server that runs out of memory while reading it
+                    # restarts without its local files (a large single upload is stored after it is read,
+                    # so making its smaller copy does not add to the memory the reading needs)
                     self._queue_upload(doc["id"])
                 return doc["id"], True
         if batch_id:
@@ -219,7 +239,11 @@ class MongoInvoiceStore:
         path = self.files_dir / doc["stored_path"]
         if not path.exists():
             return False
-        data, content_type = compact_file(path.read_bytes(), doc["file_name"])
+        raw = path.read_bytes()
+        if _store_as_is(raw, doc["file_name"]):
+            data, content_type = raw, "image/jpeg"  # a phone photo already made smaller in the browser
+        else:
+            data, content_type = compact_file(raw, doc["file_name"])
         sha = doc["file_sha256"]
         if not self._in_gridfs(sha):
             if self._cluster_bytes() + len(data) > self.files_limit:

@@ -298,3 +298,20 @@ def test_open_store_falls_back_to_sqlite_when_mongodb_fails(monkeypatch):
     monkeypatch.setattr(storage.InvoiceStore, "for_workspace", classmethod(lambda cls, name: "sqlite store"))
     assert storage.open_store() == "sqlite store"
     assert "bad auth" in config.MONGODB_ERROR
+
+
+@needs_mongo
+def test_a_photo_made_smaller_by_the_browser_is_in_mongodb_before_it_is_read(tmp_path):
+    """A server that runs out of memory while reading a photo restarts without its local files: the
+    photo is stored in the database as soon as it arrives (as it is, without decoding it)."""
+    store = _open("mongo", tmp_path)
+    try:
+        data = _photo(3000, 2250)
+        invoice_id, _ = store.add_file("IMG_2.jpg", data, queue=False)
+        store.wait_for_uploads()
+        row = store.get(invoice_id)
+        assert row["status"] == "processing" and store.invoices.find_one({"id": invoice_id})["file_stored"]
+        store.file_path(row).unlink()
+        assert store.file_path(row).read_bytes() == data
+    finally:
+        _close(store)

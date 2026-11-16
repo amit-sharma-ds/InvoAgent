@@ -48,7 +48,7 @@ REREAD_BELOW = 0.95
 REREAD_LONG_BELOW = 0.85  # lines longer than REREAD_MAX_RATIO heights are read again only below this
 REREAD_MAX_RATIO = 12
 HAND_TRUST = 0.6  # the larger model's reading wins from this confidence on
-HAND_BATCH = 8  # the larger model's working memory grows with the batch (512 MB servers)
+HAND_BATCH = 4  # the larger model's working memory grows with the batch (512 MB servers: 8 used 80 MB more)
 THREADS = int(os.environ.get("PHOTO_OCR_THREADS", "0"))  # 0 = ONNX Runtime's default (all cores)
 
 _engine = None
