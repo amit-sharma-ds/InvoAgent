@@ -288,13 +288,10 @@
   pick("pick-folder", (files) => { if (files.length) companyFromFolder(files[0].webkitRelativePath.split("/")[0]); });
   if (window.matchMedia && matchMedia("(pointer: coarse)").matches) {  // a phone: the camera comes first
     $("folder-label").hidden = true;
-    const photo = $("photo-label"), files = zone.querySelector('label[for="pick-files"]');
-    photo.className = "btn";
-    files.className = "btn secondary";
-    photo.parentNode.insertBefore(photo, files);
-    zone.querySelectorAll("[data-phone]").forEach((el) => { el.textContent = el.dataset.phone; });
-  } else {
-    $("photo-label").hidden = true;  // a computer: Choose files does the same
+    $("photo-label").className = "btn";
+    zone.querySelector('label[for="pick-files"]').className = "btn secondary";
+    zone.parentNode.insertBefore($("phone-camera"), zone);
+    form.querySelectorAll("[data-phone]").forEach((el) => { el.textContent = el.dataset.phone; });
   }
 
   // drag and drop anywhere on the page, folders included

@@ -4,6 +4,7 @@ import pytest
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 
+from invoice_parser.extract import _gst_type_message
 from invoice_parser.matcher import LabelMatcher
 from invoice_parser.pipeline import InvoiceParser
 
@@ -191,7 +192,7 @@ def test_label_only_two_column_layout(parser):
     assert result["checks"]["subtotal_plus_tax_minus_discount_equals_total"] is True
 
 
-def _tally_layout(c, sgst="22,500.00"):
+def _tally_layout(c, sgst="22,500.00", buyer_gstin="06AABCS7788K1ZP"):
     """Tally ERP 'Tax Invoice': boxed labels with the value BELOW them, Indian number format, CGST + SGST rows,
     amount in words and the seller named only in the 'for X / Authorised Signatory' block and the header."""
     c.setFont("Helvetica-Bold", 13)
@@ -213,7 +214,7 @@ def _tally_layout(c, sgst="22,500.00"):
     c.drawString(40, 702, "Shakti Steel Tubes Limited")
     c.setFont("Helvetica", 9)
     c.drawString(40, 689, "Industrial Area, Phase 2, Panipat")
-    c.drawString(40, 676, "GSTIN/UIN : 06AABCS7788K1ZP")
+    c.drawString(40, 676, f"GSTIN/UIN : {buyer_gstin}")
     for x, h in [(40, "Sl No."), (80, "Description of Goods"), (300, "HSN/SAC"), (370, "Quantity"),
                  (430, "Rate"), (470, "per"), (510, "Amount")]:
         c.drawString(x, 640, h)
@@ -349,6 +350,20 @@ def test_ocr_digit_error_in_sgst_is_corrected_by_the_invoice_arithmetic(parser):
     assert f["total"]["value"] == pytest.approx(295000)
     assert all(result["checks"].values())
     assert any("SGST was read as 22,600.00 and corrected to 22,500.00" in w for w in result["warnings"])
+
+
+def test_a_gst_type_mismatch_names_both_states(parser):
+    """CGST + SGST charged from Haryana to a buyer in Uttar Pradesh: the warning says which states
+    the two GSTINs belong to and which tax was expected."""
+    result = parser.parse_bytes("tally-other-state.pdf",
+                                _to_pdf(lambda c: _tally_layout(c, buyer_gstin="09AGHPR3344C1ZG")))
+    assert result["checks"]["gst_type_matches_states"] is False
+    assert ("GST type does not match the states: the seller is in Haryana (06) and the buyer in "
+            "Uttar Pradesh (09), so IGST is expected, but the invoice shows CGST + SGST.") in result["warnings"]
+    same_state = {"seller": {"value": {"tax_id": "06BKXPT4822Q3ZY"}}, "buyer": {"value": {"tax_id": "06AJKPM6655F1ZZ"}},
+                  "tax": {"components": {"IGST": 45000.0}}}
+    assert _gst_type_message(same_state).endswith(
+        "both in Haryana (06), so CGST + SGST is expected, but the invoice shows IGST.")
 
 
 def test_a_real_mismatch_is_not_hidden(parser):

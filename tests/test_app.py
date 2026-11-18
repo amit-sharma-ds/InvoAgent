@@ -158,6 +158,7 @@ def test_upload_page_has_one_uploader(client):
     html = client.get("/upload").data.decode("utf-8")
     assert 'id="uploader"' in html and 'id="drop-zone"' in html and 'id="upload-company"' in html
     assert 'capture="environment"' in html and "webkitdirectory" in html and "Ctrl" in html
+    assert 'id="phone-camera"' in html and "<strong>Phone camera</strong>" in html  # shown on a PC too
     assert "Recent uploads" in html and "DroidCam" not in html and "/camera/phone" not in html
     old = client.get("/camera")  # old links and bookmarks open Add invoices
     assert old.status_code == 302 and old.headers["Location"].endswith("/upload")

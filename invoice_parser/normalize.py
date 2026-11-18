@@ -142,6 +142,21 @@ _LOOK_ALIKES = {"8": "B", "B": "8", "0": "OD", "O": "0D", "D": "0O", "1": "I", "
                 "2": "Z", "Z": "2", "6": "G", "G": "6", "7": "T", "T": "7"}
 
 
+# GST state codes: the first two digits of a GSTIN
+GST_STATES = {
+    "01": "Jammu and Kashmir", "02": "Himachal Pradesh", "03": "Punjab", "04": "Chandigarh",
+    "05": "Uttarakhand", "06": "Haryana", "07": "Delhi", "08": "Rajasthan", "09": "Uttar Pradesh",
+    "10": "Bihar", "11": "Sikkim", "12": "Arunachal Pradesh", "13": "Nagaland", "14": "Manipur",
+    "15": "Mizoram", "16": "Tripura", "17": "Meghalaya", "18": "Assam", "19": "West Bengal",
+    "20": "Jharkhand", "21": "Odisha", "22": "Chhattisgarh", "23": "Madhya Pradesh", "24": "Gujarat",
+    "25": "Daman and Diu", "26": "Dadra and Nagar Haveli and Daman and Diu", "27": "Maharashtra",
+    "28": "Andhra Pradesh (old)", "29": "Karnataka", "30": "Goa", "31": "Lakshadweep", "32": "Kerala",
+    "33": "Tamil Nadu", "34": "Puducherry", "35": "Andaman and Nicobar Islands", "36": "Telangana",
+    "37": "Andhra Pradesh", "38": "Ladakh", "97": "Other Territory", "99": "Centre Jurisdiction",
+}
+UTGST_STATES = {"04", "25", "26", "31", "35", "38"}  # union territories without a legislature: CGST + UTGST
+
+
 def gstin_check_char(first14: str) -> str:
     """The mod-36 check character of an Indian GSTIN, computed from its first 14 characters."""
     total = 0

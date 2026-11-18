@@ -106,7 +106,9 @@ being processed at that moment is not deleted.
      value = 45,000, so it is corrected and a warning says so. A value is only changed when the rest of the
      invoice proves it **and** the difference is a single digit; a real mistake on the invoice still fails its check,
    - **GSTIN check digit** for seller and buyer (OCR mistakes such as `O`/`0` are repaired only when the check digit then fits),
-   - **CGST = SGST**, and CGST+SGST for the same state vs IGST for different states (first two GSTIN digits),
+   - **CGST = SGST**, and CGST+SGST for the same state vs IGST for different states (first two GSTIN digits);
+     the warning names both states ("the seller is in Uttar Pradesh (09) and the buyer in Haryana (06), so
+     IGST is expected, but the invoice shows CGST + SGST"),
    - **duplicate invoice**: the same invoice number from the same seller (same GSTIN, or same name) already
      exists, even as a different file or photo (`KVIN/2026-27/007` and `KVIN 2026 27 007` count as equal).
      The exact same file is never processed twice (SHA-256).

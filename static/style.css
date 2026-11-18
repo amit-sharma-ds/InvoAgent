@@ -400,3 +400,14 @@ kbd { font: 12px/1 ui-monospace, Consolas, monospace; padding: 2px 5px; border: 
 }
 .drop-actions .btn { font: inherit; font-size: 14px; font-weight: 600; line-height: 1.2; }
 .upload-thumb { border: 1px solid var(--border); }
+.phone-camera { display: flex; align-items: center; gap: 12px; margin: 12px 0; padding: 12px 14px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: #fbfcff; }
+.phone-camera-icon { flex: none; width: 32px; height: 32px; fill: none; stroke: var(--brand); stroke-width: 1.6;
+  stroke-linecap: round; stroke-linejoin: round; }
+.phone-camera-text { flex: 1; min-width: 0; }
+.phone-camera-text p { margin: 2px 0 0; }
+.phone-camera .btn { flex: none; cursor: pointer; font: inherit; font-size: 14px; font-weight: 600; line-height: 1.2; }
+@media (max-width: 600px) {
+  .phone-camera { flex-wrap: wrap; }
+  .phone-camera .btn { flex: 1 1 100%; text-align: center; }
+}

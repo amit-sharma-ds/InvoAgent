@@ -23,13 +23,23 @@
         or paste a copied picture with <kbd>Ctrl</kbd>+<kbd>V</kbd></p>
       <div class="drop-actions">
         <label class="btn" for="pick-files">Choose files</label>
-        <label class="btn secondary" for="pick-photo" id="photo-label">Take photo</label>
         <label class="btn secondary" for="pick-folder" id="folder-label">Choose folder</label>
         <button class="btn secondary" type="button" id="paste-btn" hidden>Paste picture</button>
       </div>
       <input class="vh" type="file" id="pick-files" name="files" accept=".pdf,.zip,image/*" multiple>
       <input class="vh" type="file" id="pick-photo" name="files" accept="image/*" capture="environment">
       <input class="vh" type="file" id="pick-folder" webkitdirectory multiple>
+    </div>
+
+    <div class="phone-camera" id="phone-camera">
+      <svg class="phone-camera-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.6l1.4-2h5l1.4 2h1.6A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z"/><circle cx="12" cy="12.5" r="3.5"/></svg>
+      <div class="phone-camera-text">
+        <strong>Phone camera</strong>
+        <p class="muted small" data-phone="Take a photo of each bill with this phone's camera; every photo is listed below. Full camera resolution, so this gives the best accuracy.">Open
+          this page on your phone and tap <em>Take photo</em>: the phone's camera opens in the browser, no app
+          needed. Full camera resolution, so this gives the best accuracy.</p>
+      </div>
+      <label class="btn secondary" for="pick-photo" id="photo-label">Take photo</label>
     </div>
 
     <div class="upload-selected" id="upload-selected" hidden>

@@ -1222,6 +1222,27 @@ def _gst_checks(fields):
     return out
 
 
+def _gst_type_message(fields):
+    """The GST-type warning with both states named ('the seller is in Uttar Pradesh (09) and the buyer
+    in Haryana (06), so IGST is expected, but the invoice shows CGST + SGST')."""
+    seller, buyer = (((fields.get(party) or {}).get("value") or {}).get("tax_id") or "" for party in ("seller", "buyer"))
+    if len(seller) < 2 or len(buyer) < 2:
+        return CHECK_MESSAGES["gst_type_matches_states"]
+    order = ("CGST", "SGST", "UTGST", "IGST")
+    comps = (fields.get("tax") or {}).get("components") or {}
+    shown = " + ".join(sorted(comps, key=lambda k: order.index(k) if k in order else len(order)))
+
+    def state(code):
+        return f"{nz.GST_STATES[code]} ({code})" if code in nz.GST_STATES else f"state code {code}"
+
+    if seller[:2] == buyer[:2]:
+        local = "CGST + UTGST" if seller[:2] in nz.UTGST_STATES else "CGST + SGST"
+        return (f"GST type does not match the states: the seller and the buyer are both in {state(seller[:2])}, "
+                f"so {local} is expected, but the invoice shows {shown}.")
+    return (f"GST type does not match the states: the seller is in {state(seller[:2])} and the buyer in "
+            f"{state(buyer[:2])}, so IGST is expected, but the invoice shows {shown}.")
+
+
 def _one_digit_apart(a, b):
     """True when two amounts differ in exactly one digit: the typical OCR misread (22,600 for 22,500)."""
     x, y = f"{abs(a):.2f}", f"{abs(b):.2f}"
@@ -1592,7 +1613,8 @@ def extract_invoice(lines, matcher):
     checks = {**_checks(fields, items, words_total), **_gst_checks(fields)}
     if not has_table:
         warnings.append("No line-item table detected.")
-    warnings += [CHECK_MESSAGES.get(name, name) for name, ok in checks.items() if ok is False]
+    warnings += [_gst_type_message(fields) if name == "gst_type_matches_states" else CHECK_MESSAGES.get(name, name)
+                 for name, ok in checks.items() if ok is False]
     for name in REQUIRED_FIELDS:
         if fields.get(name) is None:
             warnings.append(f"Could not find {name.replace('_', ' ')}.")
