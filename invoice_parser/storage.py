@@ -18,7 +18,8 @@ from pathlib import Path
 
 from . import config
 from . import normalize as nz
-from .extract import REQUIRED_FIELDS
+from .companies import ENTRY_TYPES, MONEY_FIELDS, NO_COMPANY, build_dashboard
+from .extract import REQUIRED_FIELDS, overall_confidence
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS batches (
@@ -73,7 +74,9 @@ CREATE TABLE IF NOT EXISTS invoices (
     reviewed_at TEXT,
     edited INTEGER DEFAULT 0,                    -- 1 when a reviewer corrected fields
     duplicate_of INTEGER,                        -- earlier invoice with the same seller + number
-    invoice_key TEXT                             -- invoice number without spaces / punctuation
+    invoice_key TEXT,                            -- invoice number without spaces / punctuation
+    company TEXT,                                -- the company (folder) the invoice belongs to
+    entry_type TEXT                              -- set by hand: purchase (debit) | sale (credit)
 );
 CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);
 CREATE INDEX IF NOT EXISTS idx_invoices_number ON invoices(invoice_number);
@@ -98,17 +101,18 @@ CREATE INDEX IF NOT EXISTS idx_items_invoice ON line_items(invoice_id);
 # Columns added after the first release: added automatically to older databases.
 _ADDED_COLUMNS = {"review_status": "TEXT DEFAULT 'pending'", "review_note": "TEXT", "reviewed_at": "TEXT",
                   "edited": "INTEGER DEFAULT 0", "duplicate_of": "INTEGER", "invoice_key": "TEXT",
-                  "shipping": "REAL"}
+                  "shipping": "REAL", "company": "TEXT", "entry_type": "TEXT"}
 
 # Columns shown in the table view (same set for every invoice; missing values are NULL).
 TABLE_COLUMNS = [
-    "id", "file_name", "status", "needs_review", "review_status", "duplicate_of", "invoice_number",
+    "id", "file_name", "company", "status", "needs_review", "review_status", "duplicate_of", "invoice_number",
     "invoice_date", "due_date", "po_number", "seller_name", "seller_tax_id", "buyer_name", "buyer_tax_id",
     "currency", "subtotal", "tax", "discount", "shipping", "total", "line_item_count", "overall_confidence",
 ]
 # Columns written to CSV / Excel exports.
 EXPORT_COLUMNS = [
-    "id", "file_name", "status", "needs_review", "review_status", "review_note", "reviewed_at", "edited",
+    "id", "file_name", "company", "entry_type", "status", "needs_review", "review_status", "review_note",
+    "reviewed_at", "edited",
     "duplicate_of", "invoice_number", "invoice_date", "due_date", "po_number", "currency", "seller_name",
     "seller_address", "seller_tax_id", "seller_email", "seller_phone", "buyer_name", "buyer_address",
     "buyer_tax_id", "buyer_email", "buyer_phone", "subtotal", "tax", "discount", "shipping", "total", "totals_ok",
@@ -134,7 +138,7 @@ INVOICE_COLUMNS = [
     "buyer_address", "buyer_tax_id", "buyer_email", "buyer_phone", "subtotal", "tax", "discount", "shipping",
     "total", "totals_ok", "line_items_ok", "line_item_count", "needs_review", "warnings", "result_json",
     "created_at", "started_at", "processed_at", "review_status", "review_note", "reviewed_at", "edited",
-    "duplicate_of", "invoice_key",
+    "duplicate_of", "invoice_key", "company", "entry_type",
 ]
 
 
@@ -144,6 +148,10 @@ def _most_common_names(pairs):
         counts.setdefault(tax_id, {}).setdefault(name, 0)
         counts[tax_id][name] += 1
     return {t: max(names, key=names.get) for t, names in counts.items()}
+
+
+KNOWN_PARTY = 0.95        # a party name read exactly as approved before for its GSTIN
+KNOWN_PARTY_FIXED = 0.9   # ... or put back from a misreading of it
 
 
 def known_party_names(result, store, warnings_key="warnings"):
@@ -159,15 +167,25 @@ def known_party_names(result, store, warnings_key="warnings"):
     if not ids:
         return
     known = store.approved_party_names(ids)
+    learned = False
     for key, party in parties:
         name, approved = party.get("name"), known.get(party.get("tax_id"))
-        if not name or not approved or name.lower() == approved.lower():
+        if not name or not approved:
             continue
-        if fuzz.ratio(name.lower(), approved.lower()) >= 60:
+        if name.lower() == approved.lower():
+            sure = KNOWN_PARTY  # read exactly as a person approved it before for this GSTIN
+        elif fuzz.ratio(name.lower(), approved.lower()) >= 60:
             party["name"] = approved
+            sure = KNOWN_PARTY_FIXED
             result.setdefault(warnings_key, []).append(
                 f"{key.capitalize()} name was read as '{name}' and set to '{approved}', the name approved before "
                 f"for GSTIN {party['tax_id']}.")
+        else:
+            continue
+        fields[key]["confidence"] = max(fields[key].get("confidence") or 0, sure)
+        learned = True
+    if learned:  # the app learns from approvals: a party known this way no longer sends the invoice to review
+        result["overall_confidence"] = overall_confidence(fields)
 
 
 def open_store():
@@ -324,6 +342,7 @@ class InvoiceStore:
                         con.execute(f"ALTER TABLE invoices ADD COLUMN {column} {kind}")
             con.executescript(SCHEMA)
             con.execute("CREATE INDEX IF NOT EXISTS idx_invoices_key ON invoices(invoice_key)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_invoices_company ON invoices(company)")
 
     @classmethod
     def for_workspace(cls, name):
@@ -351,11 +370,11 @@ class InvoiceStore:
             return con.execute("INSERT INTO batches(name, source, created_at) VALUES (?, ?, ?)",
                                (name, source, _now())).lastrowid
 
-    def add_file(self, file_name, data, batch_id=None, queue=True):
+    def add_file(self, file_name, data, batch_id=None, queue=True, company=None):
         """Store a file. Returns (invoice_id, is_new). A file whose content is already stored
-        is not added again (is_new=False) but is still recorded as part of the batch.
-        queue=False keeps a new file out of the background queue so the caller can
-        process it right away."""
+        is not added again (is_new=False) but is still recorded as part of the batch (and put in
+        the company when it has none). queue=False keeps a new file out of the background queue
+        so the caller can process it right away."""
         sha = hashlib.sha256(data).hexdigest()
         with self._db() as con:
             row = con.execute("SELECT id FROM invoices WHERE file_sha256 = ?", (sha,)).fetchone()
@@ -369,14 +388,17 @@ class InvoiceStore:
                 try:
                     invoice_id = con.execute(
                         "INSERT INTO invoices(batch_id, file_name, file_sha256, stored_path, status,"
-                        " created_at, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                        " created_at, started_at, company) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                         (batch_id, Path(file_name).name, sha, rel, "queued" if queue else "processing",
-                         _now(), None if queue else _now())).lastrowid
+                         _now(), None if queue else _now(), company or None)).lastrowid
                 except sqlite3.IntegrityError:  # same file added at the same moment elsewhere
                     is_new = False
                     row = con.execute("SELECT id FROM invoices WHERE file_sha256 = ?", (sha,)).fetchone()
             if not is_new:
                 invoice_id = row["id"]
+                if company:
+                    con.execute("UPDATE invoices SET company = ? WHERE id = ? AND company IS NULL",
+                                (company, invoice_id))
             if batch_id:
                 con.execute("INSERT OR IGNORE INTO batch_members(batch_id, invoice_id) VALUES (?, ?)",
                             (batch_id, invoice_id))
@@ -454,9 +476,14 @@ class InvoiceStore:
 
     # --- reading -----------------------------------------------------------------------
     @staticmethod
-    def _where(q=None, status=None, review=None, batch_id=None, review_status=None, alias=""):
+    def _where(q=None, status=None, review=None, batch_id=None, review_status=None, company=None, alias=""):
         p = f"{alias}." if alias else ""
         conds, args = [], []
+        if company == NO_COMPANY:
+            conds.append(f"{p}company IS NULL")
+        elif company:
+            conds.append(f"{p}company = ?")
+            args.append(company)
         if review_status in REVIEW_STATUSES:
             conds.append(f"COALESCE({p}review_status, 'pending') = ?")
             args.append(review_status)
@@ -475,8 +502,9 @@ class InvoiceStore:
             args.append(int(batch_id))
         return (" WHERE " + " AND ".join(conds)) if conds else "", args
 
-    def search(self, q=None, status=None, review=None, batch_id=None, review_status=None, limit=50, offset=0):
-        where, args = self._where(q, status, review, batch_id, review_status)
+    def search(self, q=None, status=None, review=None, batch_id=None, review_status=None, company=None,
+               limit=50, offset=0):
+        where, args = self._where(q, status, review, batch_id, review_status, company)
         with self._db() as con:
             total = con.execute(f"SELECT COUNT(*) FROM invoices{where}", args).fetchone()[0]
             rows = con.execute(f"SELECT {', '.join(TABLE_COLUMNS)} FROM invoices{where}"
@@ -494,14 +522,15 @@ class InvoiceStore:
         out["line_items"] = [dict(i) for i in items]
         return out
 
-    def export_rows(self, q=None, status=None, review=None, batch_id=None, review_status=None):
-        where, args = self._where(q, status, review, batch_id, review_status)
+    def export_rows(self, q=None, status=None, review=None, batch_id=None, review_status=None, company=None):
+        where, args = self._where(q, status, review, batch_id, review_status, company)
         with self._db() as con:
             return [dict(r) for r in con.execute(
                 f"SELECT {', '.join(EXPORT_COLUMNS)} FROM invoices{where} ORDER BY id", args)]
 
-    def export_line_items(self, q=None, status=None, review=None, batch_id=None, review_status=None):
-        where, args = self._where(q, status, review, batch_id, review_status, alias="i")
+    def export_line_items(self, q=None, status=None, review=None, batch_id=None, review_status=None,
+                          company=None):
+        where, args = self._where(q, status, review, batch_id, review_status, company, alias="i")
         with self._db() as con:
             return [dict(r) for r in con.execute(
                 "SELECT li.invoice_id, i.invoice_number, i.seller_name, i.currency, li.line_no, li.description,"
@@ -629,68 +658,48 @@ class InvoiceStore:
     _COUNTED = ("status = 'done' AND COALESCE(review_status, 'pending') != 'rejected'"
                 " AND (duplicate_of IS NULL OR review_status = 'approved')")
 
-    def dashboard(self, currency=None, period="12m", today=None):
-        """Figures for the Dashboard tab, for ONE currency (amounts in different currencies are never
-        added together) and one period of invoice dates.
-        period: '12m' last 12 months, 'fy' this financial year (Apr-Mar), 'lfy' last financial year,
-        'all' everything (shown per year)."""
-        today = today or datetime.now().date()
+    def dashboard(self, currency=None, period="12m", today=None, company=None):
+        """Figures for the Dashboard tab (see companies.build_dashboard)."""
+        return build_dashboard(self.money_rows(), currency, period, today, company, self.company_names())
+
+    # --- companies (folders) ------------------------------------------------------------
+    def money_rows(self, company=None):
+        """The counted invoices with the fields the dashboard and the company folders need."""
+        where, args = self._where(company=company)
+        where = (where + " AND " if where else " WHERE ") + self._COUNTED
         with self._db() as con:
-            currencies = [dict(r) for r in con.execute(
-                f"SELECT currency, COUNT(*) AS n FROM invoices WHERE {self._COUNTED} AND currency IS NOT NULL"
-                " GROUP BY currency ORDER BY n DESC, MAX(id) DESC")]  # tie: the latest invoice's currency
-            if not currencies:
-                return {"currencies": [], "currency": None, "period": period, "buckets": [], "vendors": [],
-                        "summary": None, "undated": 0}
-            if currency not in {c["currency"] for c in currencies}:
-                currency = currencies[0]["currency"]
+            return [dict(r) for r in con.execute(
+                f"SELECT {', '.join(MONEY_FIELDS)} FROM invoices{where} ORDER BY id", args)]
 
-            fy_start = today.year if today.month >= 4 else today.year - 1  # Indian financial year
-            month_keys = None
-            if period == "fy":
-                start, end = f"{fy_start}-04-01", f"{fy_start + 1}-03-31"
-                month_keys = [f"{fy_start + (m > 12)}-{(m - 1) % 12 + 1:02d}" for m in range(4, 16)]
-            elif period == "lfy":
-                start, end = f"{fy_start - 1}-04-01", f"{fy_start}-03-31"
-                month_keys = [f"{fy_start - 1 + (m > 12)}-{(m - 1) % 12 + 1:02d}" for m in range(4, 16)]
-            elif period == "all":
-                start, end = "0000-01-01", "9999-12-31"
-            else:
-                period = "12m"
-                y, m = today.year, today.month
-                month_keys = []
-                for _ in range(12):
-                    month_keys.insert(0, f"{y}-{m:02d}")
-                    y, m = (y, m - 1) if m > 1 else (y - 1, 12)
-                start, end = f"{month_keys[0]}-01", f"{today.year}-{today.month:02d}-31"
+    def company_names(self):
+        with self._db() as con:
+            return sorted((r[0] for r in con.execute(
+                "SELECT DISTINCT company FROM invoices WHERE company IS NOT NULL")), key=str.lower)
 
-            where = f"{self._COUNTED} AND currency = ? AND invoice_date BETWEEN ? AND ?"
-            args = (currency, start, end)
-            bucket = "substr(invoice_date, 1, 7)" if month_keys is not None else "substr(invoice_date, 1, 4)"
-            rows = {r["k"]: dict(r) for r in con.execute(
-                f"SELECT {bucket} AS k, COUNT(*) AS invoices, SUM(total) AS total, SUM(COALESCE(tax, 0)) AS tax"
-                f" FROM invoices WHERE {where} GROUP BY k ORDER BY k", args)}
-            keys = month_keys if month_keys is not None else sorted(rows)
-            buckets = []
-            for k in keys:
-                r = rows.get(k, {"invoices": 0, "total": 0.0, "tax": 0.0})
-                total, tax = r["total"] or 0.0, r["tax"] or 0.0
-                buckets.append({"key": k, "invoices": r["invoices"], "total": round(total, 2),
-                                "tax": round(tax, 2), "taxable": round(total - tax, 2)})
-            vendors = [dict(r) for r in con.execute(
-                "SELECT COALESCE(NULLIF(seller_tax_id, ''), UPPER(TRIM(seller_name))) AS vendor_key,"
-                " MAX(seller_name) AS name, MAX(seller_tax_id) AS gstin, COUNT(*) AS invoices,"
-                " SUM(total) AS total, SUM(COALESCE(tax, 0)) AS tax"
-                f" FROM invoices WHERE {where} AND seller_name IS NOT NULL"
-                " GROUP BY vendor_key ORDER BY total DESC LIMIT 10", args)]
-            summary = dict(con.execute(
-                "SELECT COUNT(*) AS invoices, SUM(total) AS total, SUM(COALESCE(tax, 0)) AS tax,"
-                " COUNT(DISTINCT COALESCE(NULLIF(seller_tax_id, ''), UPPER(TRIM(seller_name)))) AS vendors"
-                f" FROM invoices WHERE {where}", args).fetchone())
-            undated = con.execute(f"SELECT COUNT(*) FROM invoices WHERE {self._COUNTED} AND currency = ?"
-                                  " AND invoice_date IS NULL", (currency,)).fetchone()[0]
-        return {"currencies": currencies, "currency": currency, "period": period, "buckets": buckets,
-                "vendors": vendors, "summary": summary, "undated": undated, "by_year": month_keys is None}
+    def company_counts(self):
+        """{company or None: {"invoices", "needs_review", "last_added"}}, one entry per company folder."""
+        with self._db() as con:
+            return {r["company"]: {"invoices": r["n"], "needs_review": r["review"], "last_added": r["last"]}
+                    for r in con.execute(
+                        "SELECT company, COUNT(*) AS n, SUM(CASE WHEN needs_review = 1 THEN 1 ELSE 0 END) AS review,"
+                        " MAX(created_at) AS last FROM invoices GROUP BY company")}
+
+    def set_company(self, invoice_ids, company, entry_type=None):
+        """Move invoices to a company (None: no company). entry_type None: the side is found again."""
+        ids = [int(i) for i in invoice_ids]
+        if not ids:
+            return 0
+        with self._db() as con:
+            return con.execute(
+                f"UPDATE invoices SET company = ?, entry_type = ? WHERE id IN ({','.join('?' * len(ids))})",
+                [company or None, entry_type if entry_type in ENTRY_TYPES else None] + ids).rowcount
+
+    def files_of(self, company):
+        """The stored files of a company folder (NO_COMPANY: of the invoices without a company)."""
+        where, args = self._where(company=company or NO_COMPANY)
+        with self._db() as con:
+            return [dict(r) for r in con.execute(
+                f"SELECT id, file_name, file_sha256, stored_path FROM invoices{where} ORDER BY id", args)]
 
     def vendors(self):
         """One row per seller (by GSTIN, else by name) and currency."""

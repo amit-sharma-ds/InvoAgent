@@ -11,6 +11,7 @@ import threading
 import time
 
 from . import config
+from .companies import auto_company
 from .pipeline import get_parser
 from .storage import known_party_names
 
@@ -77,6 +78,11 @@ class BatchWorker:
                 except Exception:
                     log.exception("Could not look up known party names")
             self.store.save_result(job["id"], result, int((time.perf_counter() - started) * 1000))
+            if hasattr(self.store, "company_names"):
+                try:  # uploaded without a company: the known company the invoice names
+                    auto_company(self.store, job["id"])
+                except Exception:
+                    log.exception("Could not find the company of invoice %s", job["id"])
             return result
         except Exception as exc:
             log.exception("Failed to process invoice %s (%s)", job["id"], job["file_name"])

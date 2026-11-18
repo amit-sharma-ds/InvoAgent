@@ -17,12 +17,12 @@
       {% set tabs = [
         ('index', 'Overview', none),
         ('dashboard', 'Dashboard', none),
-        ('upload_page', 'Upload', none),
+        ('companies', 'Companies', none),
+        ('upload_page', 'Add invoices', none),
         ('invoices', 'Invoices', nav_stats.total),
         ('review_queue', 'Review queue', nav_stats.needs_review),
         ('data_sheet', 'Data sheet', none),
         ('vendors', 'Vendors', none),
-        ('camera', 'Phone camera', none),
         ('scanner', 'Scanner', none),
       ] %}
       {% for key, label, count in tabs %}

@@ -1,31 +1,88 @@
 {% extends "base.html" %}
+{% from "_company.html" import company_input with context %}
 {% block content %}
 <section class="card">
-  <h1>Upload invoices</h1>
-  <p class="muted">One invoice shows its result right away. Many files or a ZIP are processed in the background.</p>
+  <h1>Add invoices</h1>
+  <p class="muted">Take a phone photo, paste a copied picture, or add PDFs, photos, a ZIP or a whole folder.
+    A pasted picture is read straight away; one invoice shows its result right away, more are read in the
+    background.</p>
 
-  <form method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data"
-        class="dropzone" id="dropzone">
-    <input type="file" name="files" id="file" accept=".pdf,.zip,image/*" multiple required>
-    <p>Drop files here or <label for="file" class="link">choose files</label></p>
-    <p class="muted small" id="filename"></p>
-    <button class="btn" type="submit">Extract data</button>
+  <form id="uploader" method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data"
+        data-max-mb="{{ max_mb }}">
+    <label class="company-field">Company (folder)
+      {{ company_input(current_company, id='upload-company') }}
+    </label>
+    <p class="muted small field-hint">The invoices are kept in this company's folder on the
+      <a href="{{ url_for('companies') }}">Companies</a> page. Left empty, each invoice goes to the known company
+      whose name or GSTIN it shows.</p>
+
+    <div class="drop-zone" id="drop-zone">
+      <svg class="drop-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M4 14v3.5A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5V14"/></svg>
+      <p class="drop-title" data-phone="Add invoices">Drop invoices here</p>
+      <p class="muted small" data-phone="Take photos of the bills, or choose PDFs, photos or a ZIP.">PDFs, photos (JPG, PNG, TIFF, WebP), a ZIP or a whole folder ·
+        or paste a copied picture with <kbd>Ctrl</kbd>+<kbd>V</kbd></p>
+      <div class="drop-actions">
+        <label class="btn" for="pick-files">Choose files</label>
+        <label class="btn secondary" for="pick-photo" id="photo-label">Take photo</label>
+        <label class="btn secondary" for="pick-folder" id="folder-label">Choose folder</label>
+        <button class="btn secondary" type="button" id="paste-btn" hidden>Paste picture</button>
+      </div>
+      <input class="vh" type="file" id="pick-files" name="files" accept=".pdf,.zip,image/*" multiple>
+      <input class="vh" type="file" id="pick-photo" name="files" accept="image/*" capture="environment">
+      <input class="vh" type="file" id="pick-folder" webkitdirectory multiple>
+    </div>
+
+    <div class="upload-selected" id="upload-selected" hidden>
+      <div class="upload-selected-head">
+        <strong id="upload-count"></strong>
+        <button class="link-btn" type="button" id="upload-clear">Clear all</button>
+      </div>
+      <ul class="upload-list" id="upload-list"></ul>
+    </div>
+    <div class="upload-progress" id="upload-progress" hidden><span></span></div>
+    <p class="upload-msg" id="upload-msg" role="status"></p>
+    <button class="btn upload-send" type="submit" id="upload-send">Upload and extract</button>
   </form>
-  <p class="muted small">PDF (digital or scanned), JPG / PNG photos, or a ZIP of them. For thousands of files
-    use the folder import command (see README). On a phone? <a href="{{ url_for('camera') }}">Open the phone camera page</a>.</p>
 </section>
 
-<section class="card">
-  <h2>Recent batches</h2>
-  {% if batches %}
-    <ul class="plain">
-      {% for b in batches %}
-        <li><a href="{{ url_for('batch_detail', batch_id=b.id) }}">{{ b.name }}</a>
-          <span class="muted small">{{ b.finished }}/{{ b.total }} done{% if b.failed %} · {{ b.failed }} failed{% endif %}</span></li>
-      {% endfor %}
+<section class="grid-2">
+  <div class="card">
+    <h2>For the best results</h2>
+    <ul class="tips">
+      <li><strong>Phone photo:</strong> paper flat, good light, no shadow, all four edges in the picture. Take
+        several photos one after another; they are all listed before uploading.</li>
+      <li>One invoice per photo or PDF (a PDF may have several pages).</li>
+      <li>Pick the company first: the invoices go straight into its folder. Choosing a folder whose name is the
+        company fills the box for you.</li>
+      <li>The same file is never read twice, and a second copy of a saved invoice is marked as a duplicate.</li>
+      <li>Thousands of files: use the <a href="{{ url_for('scanner') }}">Scanner</a> folder or the folder import
+        command (see README).</li>
     </ul>
-  {% else %}
-    <p class="muted">No batches yet.</p>
-  {% endif %}
+  </div>
+  <div class="card">
+    <h2>Recent uploads</h2>
+    {% if recent %}
+      <ul class="recent-uploads">
+        {% for r in recent %}
+          <li>
+            <a href="{{ url_for('invoice_detail', invoice_id=r.id) }}">{{ r.file_name }}</a>
+            <span class="status {{ r.status }}">{{ r.status }}</span>
+            <span class="muted small">{{ r.company or 'No company' }}{% if r.total is not none %} · {{ r.total | amount(r.currency) }} {{ r.currency or '' }}{% endif %}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="muted">Nothing uploaded yet.</p>
+    {% endif %}
+    {% if batches %}
+      <h3>Batches</h3>
+      <ul class="plain">
+        {% for b in batches %}
+          <li><a href="{{ url_for('batch_detail', batch_id=b.id) }}">{{ b.name }}</a>
+            <span class="muted small">{{ b.finished }}/{{ b.total }} done{% if b.failed %} · {{ b.failed }} failed{% endif %}</span></li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </div>
 </section>
 {% endblock %}

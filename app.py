@@ -1,6 +1,7 @@
 """Flask web app for the invoice parser.
 
-Sidebar tabs: Overview, Upload, Invoices, Review queue, Data sheet, Vendors, Phone camera.
+Sidebar tabs: Overview, Dashboard, Companies, Upload (files, phone camera photo, paste), Invoices,
+Review queue, Data sheet, Vendors, Scanner.
 Data: MongoDB when MONGODB_URI is set (shared by every computer and the server), else SQLite in
 data/live (see config.py).
 JSON API: POST /api/parse, GET /api/invoices, GET /api/batches/<id>, GET /health.
@@ -16,8 +17,10 @@ import io
 import json
 import logging
 import os
+import re
 import socket
 import sys
+import tempfile
 import threading
 import time
 import zipfile
@@ -29,9 +32,9 @@ from flask import (Flask, Response, abort, flash, jsonify, redirect, render_temp
                    send_file, session, url_for)
 
 from invoice_parser import auth, config, fast_ocr
-from invoice_parser.camera import (DROIDCAM_PORTS, CameraError, PhoneStream, droidcam_client_running,
-                                   fetch_ip_camera_frame, find_phones, grab_local_camera, load_settings,
-                                   save_settings)
+from invoice_parser.companies import (ENTRY_TYPES, NO_COMPANY, clean_company, company_gstins, folders,
+                                      side_of, with_sides)
+from invoice_parser.settings import load_settings, save_settings
 from invoice_parser.exporting import build_xlsx, to_csv
 from invoice_parser.pipeline import get_parser
 from invoice_parser.scanner import FolderWatcher
@@ -73,7 +76,6 @@ except OSError as exc:
 
 stores = {"live": open_store()}
 workers = {"live": BatchWorker(stores["live"])}
-phone = PhoneStream()  # one shared connection to a phone camera app (DroidCam / IP Webcam)
 scan_watcher = FolderWatcher(stores["live"], workers["live"].notify, load_settings)  # scanner's folder
 
 
@@ -91,7 +93,7 @@ def worker():
 
 
 # Pages that list invoices: the Back button on an invoice returns to the last one of these (with its filters).
-LIST_PAGES = {"index", "upload_page", "invoices", "data_sheet", "vendors", "batch_detail", "dashboard", "camera"}
+LIST_PAGES = {"index", "upload_page", "invoices", "data_sheet", "vendors", "batch_detail", "dashboard", "companies"}
 
 
 # --- sign-in ---------------------------------------------------------------------------------
@@ -104,7 +106,7 @@ def _client_address():
 
 @app.before_request
 def require_login():
-    """Every page, download, camera stream and API call needs a signed-in user. The JSON API also
+    """Every page, download and API call needs a signed-in user. The JSON API also
     accepts the same user name and password as HTTP Basic auth (for other company systems)."""
     if request.endpoint in PUBLIC_ENDPOINTS or session.get("user"):
         return None
@@ -174,7 +176,9 @@ def inject_layout():
     if not session.get("user"):
         return {}
     return {"workspace": workspace(), "nav_stats": store().stats(), "endpoint": request.endpoint,
-            "back_url": back_url(), "current_user": session.get("user"), "db_error": config.MONGODB_ERROR}
+            "back_url": back_url(), "current_user": session.get("user"), "db_error": config.MONGODB_ERROR,
+            "company_names": lambda: store().company_names(),  # called only by the pages that list them
+            "current_company": session.get("company", ""), "NO_COMPANY": NO_COMPANY}
 
 
 @app.template_global()
@@ -197,7 +201,23 @@ def _filters():
         "review": request.args.get("review") == "1",
         "batch_id": request.args.get("batch", type=int),
         "review_status": request.args.get("rstatus") or None,
+        "company": request.args.get("company") or None,
     }
+
+
+def _chosen_company(value):
+    """A company typed in a form; the known spelling when it differs only in case. None: no company."""
+    return clean_company(value, store().company_names())
+
+
+def _remember_company():
+    """The company field of an upload form: used for this upload and offered next time.
+    Empty: the invoice goes to the known company it names, if any."""
+    if "company" not in request.form:
+        return clean_company(session.get("company"))
+    company = _chosen_company(request.form.get("company"))
+    session["company"] = company or ""
+    return company
 
 
 def _render_result(result, invoice=None):
@@ -239,9 +259,9 @@ def _expand_uploads(uploads):
     return files, skipped
 
 
-def _store_and_process(name, data):
+def _store_and_process(name, data, company=None):
     """Save one file and parse it right away. Returns (invoice_id, is_new)."""
-    invoice_id, is_new = store().add_file(name, data, queue=False)
+    invoice_id, is_new = store().add_file(name, data, queue=False, company=company)
     if is_new:
         worker().process_now(invoice_id)
     return invoice_id, is_new
@@ -255,36 +275,46 @@ def index():
 
 @app.get("/upload")
 def upload_page():
-    return render_template("upload.html", batches=store().list_batches(limit=5))
+    return render_template("upload.html", batches=store().list_batches(limit=5),
+                           recent=store().search(limit=8)[1], max_mb=config.MAX_UPLOAD_MB)
+
+
+def _after_upload(url, message=None):
+    """Where the browser goes next. The Upload page's own uploader (header X-Upload) gets JSON
+    {"next": url} instead of a redirect, so a message for that page is not used up on the way."""
+    if message:
+        flash(message)
+    if request.headers.get("X-Upload") == "1":
+        return jsonify(next=url)
+    return redirect(url)
 
 
 @app.post("/upload")
 def upload():
-    back = "camera" if request.form.get("source") == "camera" else "upload_page"
     uploads = request.files.getlist("files") + request.files.getlist("file")
     has_zip = any(u.filename and u.filename.lower().endswith(".zip") for u in uploads)
+    company = _remember_company()
     files, skipped = _expand_uploads(uploads)
     if not files:
         if skipped:
-            return _back_to(back, f"No supported files found. Skipped: {', '.join(skipped[:5])}")
-        return _back_to(back, "Choose a PDF, an image or a ZIP file.")
+            return _after_upload(url_for("upload_page"), f"No supported files found. Skipped: {', '.join(skipped[:5])}")
+        return _after_upload(url_for("upload_page"), "Choose a PDF, an image or a ZIP file.")
 
     if len(files) == 1 and not has_zip:  # single invoice: process now and show the result
-        invoice_id, is_new = _store_and_process(*files[0])
-        if not is_new:
-            flash("This exact file was processed before. Showing the saved result.")
-        return redirect(url_for("invoice_detail", invoice_id=invoice_id))
+        invoice_id, is_new = _store_and_process(*files[0], company=company)
+        return _after_upload(url_for("invoice_detail", invoice_id=invoice_id),
+                             None if is_new else "This exact file was processed before. Showing the saved result.")
 
     batch_id = store().create_batch(f"Upload of {len(files)} files, {datetime.now():%d %b %Y %H:%M}")
-    duplicates = sum(1 for name, data in files if not store().add_file(name, data, batch_id=batch_id)[1])
+    duplicates = sum(1 for name, data in files
+                     if not store().add_file(name, data, batch_id=batch_id, company=company)[1])
     worker().notify()
-    note = f"{len(files) - duplicates} files queued for processing."
+    note = f"{len(files) - duplicates} files queued for processing" + (f" in {company}." if company else ".")
     if duplicates:
         note += f" {duplicates} were already in the database and were skipped."
     if skipped:
         note += f" {len(skipped)} unsupported files were ignored."
-    flash(note)
-    return redirect(url_for("batch_detail", batch_id=batch_id))
+    return _after_upload(url_for("batch_detail", batch_id=batch_id), note)
 
 
 @app.get("/invoices")
@@ -292,7 +322,7 @@ def invoices():
     filters = _filters()
     page = max(1, request.args.get("page", 1, type=int))
     total, rows = store().search(**filters, limit=PAGE_SIZE, offset=(page - 1) * PAGE_SIZE)
-    return render_template("invoices.html", rows=rows, columns=TABLE_COLUMNS, total=total, page=page,
+    return render_template("invoices.html", companies=store().company_names(), rows=rows, columns=TABLE_COLUMNS, total=total, page=page,
                            pages=max(1, -(-total // PAGE_SIZE)), filters=filters, stats=store().stats(),
                            statuses=STATUSES, review_statuses=REVIEW_STATUSES, money_columns=MONEY_COLUMNS)
 
@@ -300,7 +330,7 @@ def invoices():
 @app.get("/data")
 def data_sheet():
     """Spreadsheet view: every invoice (and every line item) in one table."""
-    rows, items = store().export_rows(), store().export_line_items()
+    rows, items = with_sides(store().export_rows(), store().money_rows()), store().export_line_items()
     return render_template("data.html", rows=rows[:SHEET_ROW_LIMIT], items=items[:SHEET_ROW_LIMIT * 5],
                            total_rows=len(rows), total_items=len(items), columns=EXPORT_COLUMNS,
                            item_columns=ITEM_COLUMNS, money_columns=MONEY_COLUMNS | {"unit_price", "amount"},
@@ -337,10 +367,14 @@ def _nice_max(value):
 
 @app.get("/dashboard")
 def dashboard():
-    """Spend by month (taxable value + GST) and top vendors, for one currency and one period."""
-    data = store().dashboard(currency=request.args.get("currency"), period=request.args.get("period", "12m"))
-    data["axis_max"] = _nice_max(max((b["total"] for b in data["buckets"]), default=0))
+    """Debit (purchases) and credit (sales) by month and by company, GST, top suppliers and customers,
+    for one currency, one period and all or one company."""
+    data = store().dashboard(currency=request.args.get("currency"), period=request.args.get("period", "12m"),
+                             company=request.args.get("company") or None)
+    data["axis_max"] = _nice_max(max((max(b["debit"], b["credit"]) for b in data["buckets"]), default=0))
     data["vendor_max"] = max((v["total"] or 0 for v in data["vendors"]), default=0) or 1
+    data["customer_max"] = max((v["total"] or 0 for v in data["customers"]), default=0) or 1
+    data["company_max"] = max((max(c["debit"], c["credit"]) for c in data["company_rows"]), default=0) or 1
     return render_template("dashboard.html", d=data, periods=[("12m", "Last 12 months"),
                            ("fy", "This financial year"), ("lfy", "Last financial year"), ("all", "All years")])
 
@@ -357,7 +391,67 @@ def invoice_detail(invoice_id):
         abort(404)
     if row["status"] != "done":
         return render_template("invoice_status.html", invoice=row)
+    gstin = company_gstins(store().money_rows(company=row["company"])).get(row["company"]) if row["company"] else None
+    row["side"] = side_of(row, gstin)
     return _render_result(json.loads(row["result_json"]), invoice=row)
+
+
+@app.post("/invoices/<int:invoice_id>/company")
+def set_invoice_company(invoice_id):
+    """Move one invoice to another company and / or set its side (purchase = debit, sale = credit)."""
+    if store().get(invoice_id) is None:
+        abort(404)
+    company = _chosen_company(request.form.get("company"))
+    entry_type = request.form.get("entry_type")
+    store().set_company([invoice_id], company, entry_type if entry_type in ENTRY_TYPES else None)
+    flash(f"Invoice #{invoice_id} is in {company or 'no company'}.")
+    return redirect(url_for("invoice_detail", invoice_id=invoice_id))
+
+
+@app.post("/invoices/move")
+def move_invoices():
+    """Move the invoices selected in the list to a company."""
+    ids = [int(i) for i in request.form.getlist("ids") if i.isdigit()]
+    if not ids:
+        return _back_to("invoices", "Select one or more invoices to move.")
+    company = _chosen_company(request.form.get("company"))
+    moved = store().set_company(ids, company)
+    flash(f"{moved} invoice{'s' if moved != 1 else ''} moved to {company or 'no company'}.")
+    return redirect(back_url())
+
+
+# --- companies (one folder each) -----------------------------------------------------------
+@app.get("/companies")
+def companies():
+    return render_template("companies.html", folders=folders(store().company_counts(), store().money_rows()))
+
+
+def _safe_file_name(name):
+    return re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", name or "").strip(" .") or "file"
+
+
+@app.get("/companies/files.zip")
+def company_files_zip():
+    """A company's folder as a ZIP: every original file it holds, in a folder named after it."""
+    company = request.args.get("company") or NO_COMPANY
+    rows = store().files_of(company)
+    if not rows:
+        return _back_to("companies", "This folder has no files.")
+    folder = _safe_file_name("No company" if company == NO_COMPANY else company)
+    out, missing = tempfile.TemporaryFile(), 0  # on disk: a large folder does not fill the memory
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_STORED) as zf:  # PDFs and photos are compressed already
+        for r in rows:
+            path = store().file_path(r)
+            if path.exists():
+                zf.write(path, f"{folder}/{r['id']:05d}-{_safe_file_name(r['file_name'])}")
+            else:
+                missing += 1
+        if missing:
+            zf.writestr(f"{folder}/MISSING FILES.txt", f"{missing} original file(s) were not available "
+                        "(the database had no space left for them); their invoice data is saved.\n")
+    out.seek(0)
+    return send_file(out, mimetype="application/zip", as_attachment=True,
+                     download_name=f"{folder}-{datetime.now():%Y%m%d-%H%M}.zip")
 
 
 @app.get("/invoices/<int:invoice_id>/file")
@@ -452,99 +546,12 @@ def batch_detail(batch_id):
     return render_template("batch.html", batch=summary, rows=rows, money_columns=MONEY_COLUMNS)
 
 
-# --- cameras -------------------------------------------------------------------------------
+# --- the old Phone camera page: its photo and paste options are on the Upload page now -------------
 @app.get("/camera")
 def camera():
-    saved = load_settings()
-    return render_template("camera.html", phone_host=saved.get("phone_host", ""),
-                           phone_port=saved.get("phone_port", 4747), phone_status=phone.status())
+    return redirect(url_for("upload_page"))
 
 
-@app.post("/camera/capture")
-def camera_capture():
-    source = request.form.get("source", "ip")
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    try:
-        if source == "local":
-            data, name = grab_local_camera(int(request.form.get("local_index") or 0)), f"webcam-{stamp}.png"
-        else:
-            data, name = fetch_ip_camera_frame(request.form.get("ip_url", "")), f"phone-camera-{stamp}.jpg"
-    except CameraError as exc:
-        return _back_to("camera", str(exc))
-    except ValueError:
-        return _back_to("camera", "Enter a valid camera number (0, 1, 2...).")
-    invoice_id, _ = _store_and_process(name, data)
-    return redirect(url_for("invoice_detail", invoice_id=invoice_id))
-
-
-@app.post("/camera/phone/connect")
-def phone_connect():
-    """Connect to a camera and keep it live for the preview and the capture button.
-
-    source=pc   : a camera on this PC (webcam, or the DroidCam client's 'DroidCam Video').
-    source=wifi : a phone app over the network. For DroidCam, when the DroidCam PC client runs,
-                  its camera is used instead: the client already holds the phone (so a direct
-                  connection would be 'busy') and it gets the normal picture without green lines.
-    """
-    source = request.form.get("source", "wifi")
-    host = (request.form.get("host") or "").strip()
-    port = request.form.get("port", type=int) or 4747
-    try:
-        if source == "pc":
-            status = phone.connect_pc(request.form.get("index", type=int))
-        elif port in DROIDCAM_PORTS and droidcam_client_running():
-            status = phone.connect_pc()
-        else:
-            status = phone.connect(host, port)
-    except CameraError as exc:
-        return jsonify(ok=False, error=str(exc)), 400
-    if source != "pc" and host:
-        save_settings(phone_host=host, phone_port=port)  # remembered for next time
-    return jsonify(ok=True, **status)
-
-
-@app.get("/camera/phone/stream")
-def phone_stream():
-    """Live preview: the app relays the phone's video, so the phone has only one viewer."""
-    if not phone.connected:
-        return Response("The phone camera is not connected.", status=409)
-
-    def generate():
-        for jpg in phone.frames():
-            yield (b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: " + str(len(jpg)).encode()
-                   + b"\r\n\r\n" + jpg + b"\r\n")
-
-    return Response(generate(), mimetype="multipart/x-mixed-replace; boundary=frame",
-                    headers={"Cache-Control": "no-store"})
-
-
-@app.post("/camera/phone/capture")
-def phone_capture():
-    try:
-        jpg = phone.capture()
-    except CameraError as exc:
-        return _back_to("camera", str(exc))
-    invoice_id, _ = _store_and_process(f"phone-{datetime.now():%Y%m%d-%H%M%S}.jpg", jpg)
-    return redirect(url_for("invoice_detail", invoice_id=invoice_id))
-
-
-@app.post("/camera/phone/disconnect")
-def phone_disconnect():
-    phone.stop()
-    return jsonify(ok=True)
-
-
-@app.get("/camera/phone/status")
-def phone_status():
-    return jsonify(phone.status())
-
-
-@app.get("/camera/phone/find")
-def phone_find():
-    return jsonify(phones=find_phones())
-
-
-# --- scanner and other devices -------------------------------------------------------------------
 @app.get("/scanner")
 def scanner():
     saved = load_settings()
@@ -581,7 +588,8 @@ def _download(data, name, mimetype):
 
 @app.get("/export/invoices.csv")
 def export_invoices_csv():
-    return _download(to_csv(store().export_rows(**_filters()), EXPORT_COLUMNS), "invoices.csv", "text/csv")
+    rows = with_sides(store().export_rows(**_filters()), store().money_rows())
+    return _download(to_csv(rows, EXPORT_COLUMNS), "invoices.csv", "text/csv")
 
 
 @app.get("/export/line_items.csv")
@@ -592,7 +600,7 @@ def export_line_items_csv():
 @app.get("/export/invoices.xlsx")
 def export_invoices_xlsx():
     filters = _filters()
-    data = build_xlsx(store().export_rows(**filters), EXPORT_COLUMNS,
+    data = build_xlsx(with_sides(store().export_rows(**filters), store().money_rows()), EXPORT_COLUMNS,
                       store().export_line_items(**filters), ITEM_COLUMNS)
     return _download(data, "invoices.xlsx",
                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -643,8 +651,8 @@ def health():
 
 @app.errorhandler(413)
 def file_too_large(_error):
-    return _back_to("upload_page", f"The upload is larger than {config.MAX_UPLOAD_MB} MB. "
-                                   "For large volumes use the folder import command (see README).")
+    return _after_upload(url_for("upload_page"), f"The upload is larger than {config.MAX_UPLOAD_MB} MB. "
+                         "For large volumes use the folder import command (see README).")
 
 
 # --- startup -----------------------------------------------------------------------------

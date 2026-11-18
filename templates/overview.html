@@ -6,8 +6,8 @@
   {% if overview.total == 0 %}
     <div class="empty">
       <p><strong>No invoices here yet.</strong> Upload one or two invoices (PDF or photo) to see the result.</p>
-      <a class="btn" href="{{ url_for('upload_page') }}">Upload invoices</a>
-      <a class="btn secondary" href="{{ url_for('camera') }}">Use the phone camera</a>
+      <a class="btn" href="{{ url_for('upload_page') }}">Add invoices</a>
+      <a class="btn secondary" href="{{ url_for('upload_page') }}">Take a photo or paste one</a>
     </div>
   {% endif %}
 </section>
@@ -61,7 +61,7 @@
 <section class="card">
   <h2>How invoices flow through this app</h2>
   <ol class="steps">
-    <li><strong>Capture</strong>: upload PDFs / photos / ZIPs, import a folder, or use the phone camera.</li>
+    <li><strong>Capture</strong>: upload PDFs / photos / ZIPs, import a folder, take a phone photo or paste a copied picture (all on the Add invoices page).</li>
     <li><strong>Extract</strong>: number, dates, seller, buyer, GSTINs, line items, tax and totals are read automatically.</li>
     <li><strong>Check</strong>: totals must add up, GSTINs must be valid, CGST must equal SGST, the same invoice must not come twice.</li>
     <li><strong>Review</strong>: anything doubtful lands in the <a href="{{ url_for('invoices', review='1') }}">Review queue</a>. Correct values, then approve or reject.</li>

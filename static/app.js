@@ -1,32 +1,9 @@
 // Small progressive enhancements. The site works without this file.
 (function () {
-  const dropzone = document.getElementById("dropzone");
-  const fileInput = document.getElementById("file");
-  const fileName = document.getElementById("filename");
-
-  if (dropzone && fileInput) {
-    const show = (files) => {
-      if (!fileName) return;
-      if (!files || !files.length) fileName.textContent = "";
-      else if (files.length === 1) fileName.textContent = files[0].name;
-      else fileName.textContent = files.length + " files selected (they will be processed in the background)";
-    };
-    fileInput.addEventListener("change", () => show(fileInput.files));
-    ["dragenter", "dragover"].forEach((ev) =>
-      dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add("over"); }));
-    ["dragleave", "drop"].forEach((ev) =>
-      dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.remove("over"); }));
-    dropzone.addEventListener("drop", (e) => {
-      if (e.dataTransfer.files.length) {
-        fileInput.files = e.dataTransfer.files;
-        show(e.dataTransfer.files);
-      }
-    });
-  }
-
   // Ask before anything that cannot be undone (delete). Runs before the progress handler below.
   document.querySelectorAll("form[data-confirm]").forEach((form) => {
     form.addEventListener("submit", (e) => {
+      if (e.submitter && "noConfirm" in e.submitter.dataset) return;  // e.g. "Move selected" in the same form
       if (!window.confirm(form.dataset.confirm)) { e.preventDefault(); e.stopImmediatePropagation(); }
     });
   });
@@ -74,127 +51,6 @@
       btn.textContent = form.enctype === "multipart/form-data" ? "Reading invoice..." : "Please wait...";
     });
   });
-
-  // Phone camera over Wi-Fi (DroidCam / IP Webcam): connect, live preview, find phones.
-  const phoneForm = document.getElementById("phone-form");
-  if (phoneForm) {
-    const byId = (id) => document.getElementById(id);
-    const msg = byId("phone-msg"), box = byId("phone-preview-box"), img = byId("phone-preview");
-    const overlay = byId("camera-overlay"), big = byId("phone-big"), note = byId("camera-note");
-    const found = byId("phone-found"), connectBtn = byId("phone-connect");
-    const streamUrl = () => "/camera/phone/stream?t=" + Date.now();
-    const pcMsg = byId("pc-msg");
-    const say = (text, bad, target) => {
-      [msg, pcMsg].forEach((el) => { if (el) el.textContent = ""; });
-      const el = target || msg;
-      el.textContent = text;
-      el.className = "small " + (bad ? "missing" : "muted");
-      note.textContent = text;
-      note.className = "camera-note" + (bad ? " warn" : "");
-    };
-    // Only one <img> streams at a time, so the PC relays a single video feed.
-    const showPreview = () => { big.src = ""; img.src = streamUrl(); box.hidden = false; };
-    const openLarge = () => {
-      img.src = "";
-      big.src = streamUrl();
-      overlay.hidden = false;
-      document.body.classList.add("no-scroll");
-    };
-    const closeLarge = () => {
-      if (document.fullscreenElement) document.exitFullscreen();
-      overlay.hidden = true;
-      document.body.classList.remove("no-scroll");
-      showPreview();
-    };
-    const disconnect = async () => {
-      if (document.fullscreenElement) document.exitFullscreen();
-      img.src = "";
-      big.src = "";
-      overlay.hidden = true;
-      box.hidden = true;
-      document.body.classList.remove("no-scroll");
-      await fetch("/camera/phone/disconnect", { method: "POST" });
-      say("Disconnected. The phone is free for other apps.");
-    };
-    byId("phone-enlarge").addEventListener("click", openLarge);
-    byId("camera-close").addEventListener("click", closeLarge);
-    byId("camera-disconnect").addEventListener("click", disconnect);
-    byId("camera-fullscreen").addEventListener("click", () => {
-      if (document.fullscreenElement) document.exitFullscreen();
-      else if (overlay.requestFullscreen) overlay.requestFullscreen();
-    });
-    document.addEventListener("keydown", (e) => {
-      if (e.key === "Escape" && !overlay.hidden && !document.fullscreenElement) closeLarge();
-    });
-
-    const connect = async (button = connectBtn, body = null, target = msg) => {
-      const label = button.textContent;
-      button.disabled = true;
-      button.textContent = "Connecting...";
-      say("Connecting to the camera...", false, target);
-      try {
-        const resp = await fetch("/camera/phone/connect", { method: "POST", body: body || new FormData(phoneForm) });
-        const data = await resp.json();
-        if (data.ok) {
-          const size = `${data.width}×${data.height} video`;
-          if (data.scrambled) say(data.warning, true, target);
-          else if (data.source === "pc") say(`Connected to ${data.app} on this PC (${size}).`, false, target);
-          else say(`Connected to ${data.app} at ${data.host}:${data.port} (${size}).`, false, target);
-          box.hidden = false;
-          openLarge();  // show the camera big right away
-        } else {
-          say(data.error, true, target);
-          box.hidden = true;
-        }
-      } catch (err) {
-        say("Could not reach this app: " + err, true, target);
-      }
-      button.disabled = false;
-      button.textContent = label;
-    };
-
-    byId("pc-connect").addEventListener("click", (e) => {
-      const body = new FormData();
-      body.append("source", "pc");
-      const index = byId("pc-index").value;
-      if (index !== "") body.append("index", index);
-      connect(e.currentTarget, body, pcMsg);
-    });
-
-    phoneForm.addEventListener("submit", (e) => { e.preventDefault(); connect(); });
-
-    byId("phone-find").addEventListener("click", async (e) => {
-      const btn = e.currentTarget;
-      btn.disabled = true;
-      say("Looking for DroidCam / IP Webcam on your network (a few seconds)...");
-      found.innerHTML = "";
-      try {
-        const data = await (await fetch("/camera/phone/find")).json();
-        if (!data.phones.length) {
-          say("No phone found. Open DroidCam (or start the IP Webcam server) on the phone, check it is on the same Wi-Fi, and try again.", true);
-        } else {
-          say(`Found ${data.phones.length}. Click one to connect.`);
-          data.phones.forEach((p) => {
-            const li = document.createElement("li");
-            const b = document.createElement("button");
-            b.type = "button";
-            b.className = "chip";
-            b.textContent = `${p.app}: ${p.host}:${p.port}`;
-            b.addEventListener("click", () => { byId("phone-host").value = p.host; byId("phone-port").value = p.port; connect(); });
-            li.appendChild(b);
-            found.appendChild(li);
-          });
-        }
-      } catch (err) {
-        say("Search failed: " + err, true);
-      }
-      btn.disabled = false;
-    });
-
-    byId("phone-disconnect").addEventListener("click", disconnect);
-
-    if (phoneForm.dataset.connected === "1") showPreview();  // still connected from before
-  }
 
   // Data sheet: sheet tabs, filter, sort by column, totals per currency.
   const sheetFilter = document.getElementById("sheet-filter");
@@ -307,7 +163,7 @@
   document.addEventListener("submit", async (e) => {
     const form = e.target;
     const inputs = form.querySelectorAll('input[type="file"]');
-    if (!inputs.length || form.dataset.shrunk || typeof DataTransfer === "undefined") return;
+    if (!inputs.length || form.dataset.shrunk || form.id === "uploader" || typeof DataTransfer === "undefined") return;
     e.preventDefault();
     try {
       for (const input of inputs) {
@@ -321,50 +177,251 @@
   }, true);
 })();
 
-// Phone camera page: a copied picture (WhatsApp, Gallery, a screenshot) can be pasted and is extracted straight away.
+// Invoices list: "Move selected" sends the picked rows to a company (no delete question for it).
 (function () {
-  const form = document.getElementById("photo-form");
-  const box = document.getElementById("paste-box");
-  if (!form || !box) return;
-  const input = form.querySelector('input[type="file"]');
-  const msg = document.getElementById("paste-msg");
-  const btn = document.getElementById("paste-btn");
-  const EXT = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/bmp": "bmp", "image/tiff": "tif" };
+  const moveBtn = document.getElementById("bulk-move-btn");
+  if (!moveBtn) return;
+  const picks = () => [...document.querySelectorAll('input[name="ids"][form="bulk-delete"]')];
+  const refresh = () => {
+    const n = picks().filter((c) => c.checked).length;
+    moveBtn.disabled = n === 0;
+    moveBtn.textContent = n ? `Move selected (${n})` : "Move selected";
+  };
+  document.addEventListener("change", (e) => { if (e.target.matches('input[name="ids"], #pick-all')) refresh(); });
+  refresh();
+})();
 
-  function send(blob) {
-    if (!blob || !EXT[blob.type] || typeof DataTransfer === "undefined") return false;
-    const stamp = new Date().toISOString().replace(/\D/g, "").slice(0, 14);
-    const dt = new DataTransfer();
-    dt.items.add(new File([blob], `pasted-${stamp}.${EXT[blob.type]}`, { type: blob.type }));
-    input.files = dt.files;
-    box.textContent = "";
-    msg.textContent = "Picture pasted. Extracting…";
-    if (form.requestSubmit) form.requestSubmit(); else form.submit();
-    return true;
+// Add invoices page: one place for files, a whole folder, phone photos and pasted pictures. Everything is
+// listed first (thumbnail, size, remove), photos are made smaller, then it is all sent with a progress bar;
+// a pasted picture is sent straight away.
+// Without this script the form still works: the chosen files are sent as they are.
+(function () {
+  const form = document.getElementById("uploader");
+  if (!form) return;
+  const $ = (id) => document.getElementById(id);
+  const zone = $("drop-zone"), list = $("upload-list"), box = $("upload-selected"), count = $("upload-count");
+  const send = $("upload-send"), msg = $("upload-msg"), bar = $("upload-progress"), company = $("upload-company");
+  const fill = bar.querySelector("span");
+  const maxMb = Number(form.dataset.maxMb || 300);
+  const SUPPORTED = /\.(pdf|zip|png|jpe?g|tiff?|bmp|webp)$/i;
+  const PASTE_TYPES = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/bmp": "bmp", "image/tiff": "tif" };
+  const PREVIEW = /^image\/(png|jpeg|webp|bmp|gif)$/i;
+  let items = [], busy = false;
+
+  const size = (n) => (n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(n / 1024)) + " KB");
+  const say = (text, bad) => { msg.textContent = text || ""; msg.className = "upload-msg" + (bad ? " bad" : ""); };
+  const total = () => items.reduce((sum, it) => sum + it.file.size, 0);
+
+  function render() {
+    list.textContent = "";
+    items.forEach((it) => {
+      const li = document.createElement("li");
+      let thumb;
+      if (it.url) {
+        thumb = document.createElement("img");
+        thumb.src = it.url;
+        thumb.alt = "";
+      } else {
+        thumb = document.createElement("span");
+        thumb.textContent = (it.file.name.split(".").pop() || "file").toUpperCase().slice(0, 4);
+      }
+      thumb.className = "upload-thumb";
+      const name = document.createElement("span");
+      name.className = "upload-name";
+      name.textContent = it.label;
+      name.title = it.label;
+      const bytes = document.createElement("span");
+      bytes.className = "upload-size";
+      bytes.textContent = size(it.file.size);
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "upload-remove";
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", "Remove " + it.label);
+      remove.disabled = busy;
+      remove.addEventListener("click", () => {
+        if (it.url) URL.revokeObjectURL(it.url);
+        items = items.filter((x) => x !== it);
+        say("");
+        render();
+      });
+      li.append(thumb, name, bytes, remove);
+      list.appendChild(li);
+    });
+    box.hidden = !items.length;
+    count.textContent = items.length ? `${items.length} file${items.length > 1 ? "s" : ""} · ${size(total())}` : "";
+    send.disabled = busy || !items.length || total() > maxMb * 1048576;
+    if (!busy) send.textContent = items.length > 1 ? `Upload and extract ${items.length} files` : "Upload and extract";
+    if (total() > maxMb * 1048576) say(`Together these files are larger than ${maxMb} MB: upload them in parts.`, true);
   }
 
-  document.addEventListener("paste", (e) => {
-    const items = e.clipboardData ? Array.from(e.clipboardData.items) : [];
-    const item = items.find((it) => it.kind === "file" && EXT[it.type]);
-    if (item && send(item.getAsFile())) e.preventDefault();
-    else if (e.target === box || box.contains(e.target)) {
-      e.preventDefault();
-      msg.textContent = "No picture to paste. Copy an invoice picture first.";
+  function add(files) {
+    let skipped = 0, added = 0;
+    for (const file of files) {
+      if (!SUPPORTED.test(file.name)) { skipped += 1; continue; }
+      const key = [file.webkitRelativePath || file.name, file.size, file.lastModified].join("|");
+      if (items.some((it) => it.key === key)) continue;
+      items.push({ file, key, label: file.webkitRelativePath || file.name,
+                   url: PREVIEW.test(file.type) ? URL.createObjectURL(file) : null });
+      added += 1;
     }
-  });
-  box.addEventListener("input", () => { box.textContent = ""; });  // the box only takes pictures, not text
+    if (skipped) say(`${skipped} file${skipped > 1 ? "s" : ""} skipped: only PDF, photos and ZIP files can be read.`, true);
+    else if (added) say("");
+    render();
+  }
 
-  if (btn && navigator.clipboard && navigator.clipboard.read) {  // HTTPS pages and localhost only
-    btn.hidden = false;
-    btn.addEventListener("click", async () => {
+  function companyFromFolder(folder) {  // a folder named after the company fills an empty Company box
+    if (company && folder && !company.value.trim()) {
+      company.value = folder;
+      say(`Company set to "${folder}" from the folder name. Change it if needed.`);
+    }
+  }
+
+  const pick = (id, onPick) => $(id).addEventListener("change", (e) => {
+    const files = [...e.target.files];
+    if (onPick) onPick(files);
+    add(files);
+    e.target.value = "";  // the same file can be chosen again
+  });
+  pick("pick-files");
+  pick("pick-photo", () => { $("photo-label").textContent = "Take another photo"; });
+  pick("pick-folder", (files) => { if (files.length) companyFromFolder(files[0].webkitRelativePath.split("/")[0]); });
+  if (window.matchMedia && matchMedia("(pointer: coarse)").matches) {  // a phone: the camera comes first
+    $("folder-label").hidden = true;
+    const photo = $("photo-label"), files = zone.querySelector('label[for="pick-files"]');
+    photo.className = "btn";
+    files.className = "btn secondary";
+    photo.parentNode.insertBefore(photo, files);
+    zone.querySelectorAll("[data-phone]").forEach((el) => { el.textContent = el.dataset.phone; });
+  } else {
+    $("photo-label").hidden = true;  // a computer: Choose files does the same
+  }
+
+  // drag and drop anywhere on the page, folders included
+  async function readEntry(entry, out) {
+    if (entry.isFile) {
+      out.push(await new Promise((ok, fail) => entry.file(ok, fail)));
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      for (;;) {
+        const batch = await new Promise((ok, fail) => reader.readEntries(ok, fail));
+        if (!batch.length) break;
+        for (const child of batch) await readEntry(child, out);
+      }
+    }
+  }
+  const hasFiles = (e) => e.dataTransfer && [...e.dataTransfer.types].includes("Files");
+  let depth = 0;
+  document.addEventListener("dragenter", (e) => { if (hasFiles(e)) { depth += 1; zone.classList.add("over"); } });
+  document.addEventListener("dragleave", (e) => { if (hasFiles(e) && --depth <= 0) { depth = 0; zone.classList.remove("over"); } });
+  document.addEventListener("dragover", (e) => { if (hasFiles(e)) e.preventDefault(); });
+  document.addEventListener("drop", async (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault();
+    depth = 0;
+    zone.classList.remove("over");
+    if (busy) return;
+    const entries = [...(e.dataTransfer.items || [])].map((it) => it.webkitGetAsEntry && it.webkitGetAsEntry()).filter(Boolean);
+    const folder = entries.find((en) => en.isDirectory);
+    if (!folder) { add(e.dataTransfer.files); return; }
+    say("Reading the folder...");
+    const out = [];
+    try {
+      for (const en of entries) await readEntry(en, out);
+    } catch (err) {
+      say("Could not read the folder: " + err, true);
+    }
+    companyFromFolder(folder.name);
+    add(out.map((f) => f));
+  });
+
+  // a copied picture (WhatsApp, Gallery, a screenshot): Ctrl+V anywhere, or the Paste button
+  const stamp = () => new Date().toISOString().replace(/\D/g, "").slice(0, 14);
+  const pasted = (blob, n) => new File([blob], `pasted-${stamp()}${n ? "-" + n : ""}.${PASTE_TYPES[blob.type]}`, { type: blob.type });
+  function sendPasted(files) {  // a pasted picture is read straight away (with anything already listed)
+    if (busy) return;
+    add(files);
+    say("Picture pasted. Reading it now...");
+    if (form.requestSubmit) form.requestSubmit(); else send.click();
+  }
+  document.addEventListener("paste", (e) => {
+    const blobs = [...((e.clipboardData && e.clipboardData.items) || [])]
+      .filter((it) => it.kind === "file" && PASTE_TYPES[it.type]).map((it) => it.getAsFile()).filter(Boolean);
+    if (!blobs.length) return;  // text into the Company box stays text
+    e.preventDefault();
+    sendPasted(blobs.map((b, n) => pasted(b, n)));
+  });
+  const pasteBtn = $("paste-btn");
+  if (navigator.clipboard && navigator.clipboard.read) {  // HTTPS pages and localhost only
+    pasteBtn.hidden = false;
+    pasteBtn.addEventListener("click", async () => {
       try {
+        const found = [];
         for (const item of await navigator.clipboard.read()) {
-          for (const type of item.types) if (EXT[type] && send(await item.getType(type))) return;
+          const type = item.types.find((t) => PASTE_TYPES[t]);
+          if (type) found.push(pasted(await item.getType(type), found.length));
         }
-        msg.textContent = "No picture copied. Copy an invoice picture first, then press Paste image.";
+        if (found.length) sendPasted(found);
+        else say("No picture copied. Copy an invoice picture first.", true);
       } catch (err) {
-        msg.textContent = "The browser did not allow reading the clipboard. Tap the box and choose Paste, or press Ctrl+V.";
+        say("The browser did not allow reading the clipboard: press Ctrl+V instead.", true);
       }
     });
   }
+
+  $("upload-clear").addEventListener("click", () => {
+    items.forEach((it) => { if (it.url) URL.revokeObjectURL(it.url); });
+    items = [];
+    say("");
+    render();
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (busy || !items.length || total() > maxMb * 1048576) return;
+    busy = true;
+    render();
+    send.textContent = "Preparing photos...";
+    const data = new FormData();
+    data.append("company", company ? company.value : "");
+    for (const it of items) {
+      let file = it.file;
+      if (window.invoagentShrinkPhoto) {
+        try { file = await window.invoagentShrinkPhoto(file); } catch (err) { /* send it as it is */ }
+      }
+      data.append("files", file, file.name);
+    }
+    const many = items.length > 1;
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", form.action);
+    xhr.setRequestHeader("X-Upload", "1");  // the answer is JSON {next: url}, so its message is kept for that page
+    bar.hidden = false;
+    fill.style.width = "0%";
+    xhr.upload.onprogress = (ev) => {
+      if (!ev.lengthComputable) return;
+      const pct = Math.round((100 * ev.loaded) / ev.total);
+      fill.style.width = pct + "%";
+      send.textContent = `Uploading... ${pct}%`;
+    };
+    xhr.upload.onload = () => {
+      bar.classList.add("working");
+      send.textContent = many ? "Adding to the queue..." : "Reading invoice...";
+      say(many ? "" : "Reading the invoice. A handwritten bill can take up to a minute.");
+    };
+    xhr.onload = () => {
+      let next = null;
+      try { next = JSON.parse(xhr.responseText).next; } catch (err) { /* not JSON, e.g. the sign-in page */ }
+      window.location.href = next || xhr.responseURL || form.action;
+    };
+    xhr.onerror = () => {
+      busy = false;
+      bar.hidden = true;
+      bar.classList.remove("working");
+      render();
+      say("The upload did not reach the app (network problem). Check the connection and press Upload again.", true);
+    };
+    xhr.send(data);
+  });
+
+  render();
 })();

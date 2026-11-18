@@ -13,6 +13,7 @@ Only camera photos use it (ingest.py decides); PDFs, scans and other images keep
 import os
 import re
 import threading
+import types
 import unicodedata
 from pathlib import Path
 
@@ -24,9 +25,12 @@ from .models import Word
 MODEL_DIR = Path(__file__).with_name("models")
 DET_MODEL = MODEL_DIR / "PP-OCRv6_det_tiny.onnx"  # sha256 f42c0fbd294d95eac1a550e131b277dac97462c8025fa4b6c3cec1b7894bd3d5
 REC_MODEL = MODEL_DIR / "PP-OCRv6_rec_tiny.onnx"  # sha256 e16e242de5937ad92609223f19bc2aff3727ee40b095f996907c24749bad251b
-# A larger recogniser of the same family (21 MB) that reads handwriting much better: used only on pages
-# that read poorly (handwritten forms), and only for their doubtful lines.
-HAND_MODEL = MODEL_DIR / "PP-OCRv6_rec_small.onnx"  # sha256 6f327246b50388f3c176ae304bd95767ea6dc0c9ae92153ef8cbe210b3c14884
+# A larger recogniser of the same family that reads handwriting much better: used only on pages that
+# read poorly (handwritten forms), and only for their doubtful lines. Its matrix multiplications are
+# stored as 8-bit integers (ONNX Runtime dynamic quantization of PP-OCRv6_rec_small, 21 -> 14 MB): 27%
+# faster on the dev PC and as accurate (hand-written digits 64/69 against 63/69; the same 86/96 fields on
+# the real handwritten bills). Quantizing its convolutions too made it 7x slower and wrong half the time.
+HAND_MODEL = MODEL_DIR / "PP-OCRv6_rec_small_int8.onnx"  # sha256 107c36589b690810f5be9703526ce9f419e61e1be9e96e16b33c5f2669bc6aa4
 
 READ_SIDE = 2000  # longest side of the page the text lines are cut from (recognition quality)
 FIND_SIDE = 1280  # longest side of the copy the text lines are found on (detection time grows with pixels)
@@ -131,11 +135,16 @@ class _Session:
 
 
 def warm_up():
-    """Load the models (about a second) so the first photo does not wait for it."""
+    """Load the models (a second or two) so the first photo does not wait for it: the handwriting
+    model too, so the first handwritten bill is not a second slower than the next ones."""
     if available():
         img = np.full((64, 320, 3), 255, np.uint8)
         cv2.putText(img, "Invoice 123", (8, 44), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 0), 2)
         read_photo(img, 0)
+        with _run_lock:
+            hand = _hand_reader()
+            if hand is not None:
+                _recognize(hand, [img], batch_size=HAND_BATCH)
 
 
 def read_photo(img, page_index: int, check_upside_down: bool = False):
@@ -154,11 +163,12 @@ def read_photo(img, page_index: int, check_upside_down: bool = False):
         img = cv2.resize(img, None, fx=f, fy=f, interpolation=cv2.INTER_AREA)
     with _run_lock:
         engine = _get_engine()
-        boxes = _find_lines(engine, img)
+        boxes, text_map = _find_lines(engine, img)
         if boxes is None:
             return [], 0.0
         if check_upside_down and _reads_better_turned(engine, img, boxes):
             img, boxes = _turn_round(engine, img, boxes)
+            text_map = text_map[..., ::-1, ::-1]
         crops, read = _read(engine, img, boxes)
         conf, sure = _confidence(engine, read)
         if sure < UPSIDE_DOWN_BELOW:  # poor reading: the page may be upside down
@@ -167,10 +177,13 @@ def read_photo(img, page_index: int, check_upside_down: bool = False):
             t_conf, t_sure = _confidence(engine, t_read)
             if t_sure > sure:
                 img, boxes, crops, read, conf, sure = t_img, t_boxes, t_crops, t_read, t_conf, t_sure
+                text_map = text_map[..., ::-1, ::-1]
         if sure < HANDWRITING_BELOW:  # still poor: details written by hand
             read = [_with_gaps(text, score, info) for text, score, info in _reread(crops, read)]
             boxes, crops, read = _fill_gaps(engine, img, boxes, crops, read)
-            boxes, crops, read = _reread_dates(engine, img, boxes, crops, read)
+            boxes, crops, read = _more_date_boxes(engine, img, boxes, crops, read, text_map)
+        boxes, crops, read, dated = _reread_dates(engine, img, boxes, crops, read)
+        if sure < HANDWRITING_BELOW or dated:
             conf, _ = _confidence(engine, read)
         return _words(engine, img, boxes, crops, read, page_index), conf
 
@@ -181,8 +194,6 @@ def _hand_reader():
     global _hand
     if _hand is None and HAND_MODEL.is_file() and \
             os.environ.get("HANDWRITING_OCR", "1").strip().lower() not in ("0", "false", "no", "off"):
-        import types
-
         from rapidocr.ch_ppocr_rec.utils import CTCLabelDecode
 
         session = _Session(HAND_MODEL)
@@ -196,11 +207,17 @@ def _hand_reader():
 
 def _find_lines(engine, img):
     """Corner points (n x 4 x 2: top-left, top-right, bottom-right, bottom-left) of the page's text
-    lines, top to bottom; None when there is no text."""
-    found = engine.text_det(img)
-    if found.boxes is None or not len(found.boxes):
-        return None
-    return np.asarray(found.boxes, dtype=np.float32)
+    lines, top to bottom (None when there is no text), and the line finder's text map, kept for a
+    second, looser look on a handwritten page (_more_date_boxes)."""
+    det = engine.text_det
+    pixels = det.get_preprocess()(img)
+    if pixels is None:
+        return None, None
+    text_map = det.session(pixels)
+    boxes, _ = det.postprocess_op(text_map, img.shape[:2])
+    if not len(boxes):
+        return None, text_map
+    return np.asarray(det.sorted_boxes(np.asarray(boxes)), dtype=np.float32), text_map
 
 
 def _turn_round(engine, img, boxes):
@@ -214,19 +231,25 @@ def _turn_round(engine, img, boxes):
 
 
 PROBE_LINES = 8  # widest text lines the upside-down check reads both ways round
+PROBE_CLEAR = 0.3  # ... in two rounds of four: a mean difference this large after the first round decides
 
 
 def _reads_better_turned(engine, img, boxes):
-    """True when the page's widest text lines read with more confidence turned 180 degrees."""
+    """True when the page's widest text lines read with more confidence turned 180 degrees. Usually
+    the first four lines settle it (one way round they read at 0.9, the other at 0.3); the other four
+    are read only when it is close, which saves about 0.4 s on a photo taken sideways."""
     width = np.linalg.norm(boxes[:, 1] - boxes[:, 0], axis=1)
     height = np.linalg.norm(boxes[:, 3] - boxes[:, 0], axis=1)
     lines = [k for k in np.argsort(-width) if width[k] >= 3 * height[k] and height[k] >= 8][:PROBE_LINES]
-    if not lines:
-        return False
-    crops = engine.crop_text_regions(img, boxes[lines])
-    read = _recognize(engine.text_rec, crops + [np.ascontiguousarray(c[::-1, ::-1]) for c in crops])
-    as_is = sum(score for _, score, _ in read[:len(crops)])
-    turned = sum(score for _, score, _ in read[len(crops):])
+    as_is = turned = 0.0
+    for start in range(0, len(lines), PROBE_LINES // 2):
+        part = lines[start: start + PROBE_LINES // 2]
+        crops = engine.crop_text_regions(img, boxes[part])
+        read = _recognize(engine.text_rec, crops + [np.ascontiguousarray(c[::-1, ::-1]) for c in crops])
+        as_is += sum(score for _, score, _ in read[:len(crops)])
+        turned += sum(score for _, score, _ in read[len(crops):])
+        if abs(turned - as_is) >= PROBE_CLEAR * (start + len(part)):
+            break
     return turned > as_is
 
 
@@ -283,9 +306,47 @@ def _reread(crops, read):
     again = _recognize(hand, [crops[k] for k in doubtful], word_boxes=True, batch_size=HAND_BATCH)
     read = list(read)
     for k, new in zip(doubtful, again):
-        if _clean(new[0]) and (new[1] >= HAND_TRUST or new[1] > read[k][1]):
+        old = read[k][0]
+        if (_clean(new[0]) and not _spoils_number(old, new[0])
+                and (new[1] > read[k][1] or (new[1] >= HAND_TRUST and not _adds_digits(old, new[0])))):
             read[k] = new
     return read
+
+
+def _spoils_number(old, new):
+    """True when `new` turns a digit of a number in `old` (a run of digits only, such as '12' or the '288'
+    of '42,288.14') into a letter or drops it: the quantized larger model once read the date 'Date:12' as
+    'Date:1R'. Letters among digits (a GSTIN '068KXPT…' -> '06BKXPT…') and in words may still change."""
+    from difflib import SequenceMatcher
+
+    for tag, i1, i2, j1, j2 in SequenceMatcher(None, old, new, autojunk=False).get_opcodes():
+        if tag not in ("replace", "delete"):
+            continue
+        lost = sum(ch.isdigit() for ch in old[i1:i2]) - sum(ch.isdigit() for ch in new[j1:j2])
+        if lost <= 0:
+            continue
+        for i in range(i1, i2):
+            if not old[i].isdigit():
+                continue
+            a = b = i
+            while a > 0 and old[a - 1].isalnum():
+                a -= 1
+            while b + 1 < len(old) and old[b + 1].isalnum():
+                b += 1
+            if b > a and old[a: b + 1].isdigit():
+                return True
+    return False
+
+
+def _adds_digits(old, new):
+    """True when `new` has digits put in between the characters of `old` rather than in place of some of
+    them. A less sure re-reading may turn letters into the digits they hide ('380S' -> '3805', '4R88' ->
+    '42288'), but not add digits to a number read surely: the larger model, quantized, once read a total
+    of '49900' as '499900'."""
+    from difflib import SequenceMatcher
+
+    return any(tag == "insert" and any(ch.isdigit() for ch in new[j1:j2])
+               for tag, _, _, j1, j2 in SequenceMatcher(None, old, new, autojunk=False).get_opcodes())
 
 
 GAP_MIN = 0.5     # a gap between two words of a row, in line heights, that may hide a missed character ...
@@ -350,51 +411,255 @@ def _fill_gaps(engine, img, boxes, crops, read):
             list(read) + [found[k] for k in new])
 
 
-_DATE_LABEL = re.compile(r"(?i)\bdat(e|ed)\b\s*[:.;]?\s*\S{0,3}$")
+_DATE_WORD = re.compile(r"(?i)\bdat(?:e|ed)\b\s*[:.;]?")
 _WRITTEN_DATE = re.compile(r"\b(\d{1,2})\s*[|/.\- ]\s*(\d{1,2})\s*[|/.\- ]\s*((?:19|20)?\d{2})\b")
+_MONTH_NAME = re.compile(r"(?i)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\b")
+_WORD = re.compile(r"[A-Za-z]{3,}")  # a word, not a misread figure ('1R', 'O9')
+_YEAR_FIRST = re.compile(r"\b(?:19|20)\d\d\s*[-/.]\s*\d{1,2}\s*[-/.]\s*\d{1,2}\b")  # 2026-09-12
+DATE_SURE = 0.5         # mean confidence of a date's digits needed to keep a date read figure by figure
+DATE_BOX_THRESH = 0.4   # a second, looser look for date boxes on a handwritten page (the finder's own: 0.5)
+
+
+def _more_date_boxes(engine, img, boxes, crops, read, text_map):
+    """A date label the line finder was not quite sure of is looked for again: on a slightly turned
+    photo of a bill book it dropped the whole 'Date: 12|8|25' box (score just under 0.5) and only '25'
+    was read. Boxes found at a looser threshold that the first look did not have are read, and those
+    holding a date label are added."""
+    if text_map is None or len(boxes) == 0:
+        return boxes, crops, read
+    import copy
+
+    looser = copy.copy(engine.text_det.postprocess_op)
+    looser.box_thresh = DATE_BOX_THRESH
+    extra, _ = looser(text_map, img.shape[:2])
+    if not len(extra):
+        return boxes, crops, read
+    extra = np.asarray(extra, dtype=np.float32)
+    ex0, ey0, ex1, ey1 = extra[..., 0].min(1), extra[..., 1].min(1), extra[..., 0].max(1), extra[..., 1].max(1)
+    bx0, by0, bx1, by1 = boxes[..., 0].min(1), boxes[..., 1].min(1), boxes[..., 0].max(1), boxes[..., 1].max(1)
+    inter = (np.clip(np.minimum(ex1[:, None], bx1) - np.maximum(ex0[:, None], bx0), 0, None)
+             * np.clip(np.minimum(ey1[:, None], by1) - np.maximum(ey0[:, None], by0), 0, None)).sum(1)
+    new = extra[inter < 0.3 * np.maximum((ex1 - ex0) * (ey1 - ey0), 1)]
+    if not len(new):
+        return boxes, crops, read
+    new_crops = engine.crop_text_regions(img, new)
+    found = _recognize(engine.text_rec, new_crops, word_boxes=True)
+    keep = [k for k, (t, s, _) in enumerate(found) if s >= engine.text_score and _DATE_WORD.search(t)]
+    if not keep:
+        return boxes, crops, read
+    return (np.concatenate([boxes, new[keep]]), list(crops) + [new_crops[k] for k in keep],
+            list(read) + [found[k] for k in keep])
+
+
+def _plain_date(text):
+    """True when the text holds one written date and no other figures ('12 8 25', '12/08/2025'); a
+    date with a month name ('12 Sep 2026') or the year first ('2026-09-12') counts as plain too: it
+    is left as read."""
+    if _MONTH_NAME.search(text) or _YEAR_FIRST.search(text):
+        return True
+    m = _WRITTEN_DATE.search(text)
+    return bool(m) and not re.search(r"\d", text[:m.start()] + text[m.end():])
 
 
 def _reread_dates(engine, img, boxes, crops, read):
-    """A date written in the boxes of a form ('Date : 11 | 09 | 2026') comes back in pieces, and a
-    '11' between box lines is taken for the lines themselves. The label and what is written right of
-    it on the same row are read again as one line by the larger model ('Date:11 09 2026'), which is
-    kept when it holds a whole date that the pieces did not."""
+    """A handwritten date is read again figure by figure. On bill books it came back as 'Date:1R 8 25.',
+    as '10 1 7 1 25' (the form's box lines read as '1') or in pieces, and was then not found or found
+    wrong. The label and what is written right of it (also a little lower: handwriting sits under
+    the printed label) are cut out as one strip and read by both models, and the strip's best reading
+    as a date (day / month / year: see _read_date) replaces the pieces when its figures are read with
+    some confidence (DATE_SURE). A date that already reads plainly is left as it is, so a printed page
+    costs nothing here. Returns (boxes, crops, read, whether a date was read again)."""
     hand = _hand_reader()
-    if hand is None:
-        return boxes, crops, read
+    dated = False
     x0, y0 = boxes[..., 0].min(axis=1), boxes[..., 1].min(axis=1)
     x1, y1 = boxes[..., 0].max(axis=1), boxes[..., 1].max(axis=1)
     read = list(read)
     for i, (text, score, _) in enumerate(read):
-        if not _DATE_LABEL.search(text) or _WRITTEN_DATE.search(text):
-            continue
+        label = _DATE_WORD.search(text)
+        if not label or score < engine.text_score or _WORD.search(text[label.end():]):
+            continue  # not a date label, or other words after it in the same box ('Date: ... Due Date')
         h = y1[i] - y0[i]
         row, end = [i], x1[i]
-        for j in sorted((j for j in range(len(read)) if x0[j] >= x1[i] - 2 and read[j][0].strip()
-                         and min(y1[i], y1[j]) - max(y0[i], y0[j]) > 0.4 * min(h, y1[j] - y0[j])),
+        for j in sorted((j for j in range(len(read)) if j != i and x0[j] >= x1[i] - 2 and read[j][0].strip()
+                         and read[j][1] >= engine.text_score and y0[i] - 0.3 * h <= (y0[j] + y1[j]) / 2 <= y1[i] + 0.6 * h),
                         key=lambda j: x0[j]):
-            if x0[j] - end > 3 * h:
-                break
+            if x0[j] - end > 3 * h or _WORD.search(read[j][0]):
+                break  # the next label or words: not part of the date
             row.append(j)
             end = max(end, x1[j])
-        pieces = " ".join(read[j][0] for j in row)
-        if len(row) < 2 or _WRITTEN_DATE.search(pieces):
+        after = " ".join([text[label.end():]] + [read[j][0] for j in row[1:]])
+        if not re.search(r"\d", after) or _plain_date(after):
             continue
-        top, bottom = max(0, int(min(y0[j] for j in row)) - 2), int(np.ceil(max(y1[j] for j in row))) + 2
-        left, right = int(x0[i]), min(img.shape[1], int(np.ceil(end)) + 2)
-        span = np.ascontiguousarray(img[top:bottom, left:right])
-        again = _recognize(hand, [span], word_boxes=True)[0]
-        if again[1] < 0.85 or not _WRITTEN_DATE.search(again[0]):
+        in_line = bool(text[label.end():].strip())  # the date was read in the label's own box
+        top = max(0, int(min(y0[j] for j in row)) - 2)
+        bottom = min(img.shape[0], int(np.ceil(max(y1[j] for j in row))) + 2)
+        left = int(x0[i]) if in_line else int(np.ceil(x1[i]))
+        right = min(img.shape[1], int(np.ceil(end)) + 2)
+        if right - left < 8 or bottom - top < 8:
             continue
-        quad = np.array([[left, top], [right, top], [right, bottom], [left, bottom]], dtype=np.float32)
+        strip = img[top:bottom, left:right].copy()
+        gray = cv2.cvtColor(strip, cv2.COLOR_BGR2GRAY)
+        cut, _ = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        rule = (gray < cut).mean(axis=0) >= 0.8  # the form's box lines across the strip: they read as '1'
+        if in_line:
+            rule[: int(x1[i] - left) // 2] = False  # not in the printed label
+        strip[:, rule] = 255
+        best = None
+        for rec in (hand, engine.text_rec):
+            if rec is None:
+                continue
+            got = _read_date(rec, strip, after_label=in_line)
+            if got and (best is None or got[1] > best[1]):
+                best = got
+        if best is None or best[1] < DATE_SURE:
+            continue
         boxes = boxes.copy()
-        boxes[i] = quad
+        boxes[i] = np.array([[left, top], [right, top], [right, bottom], [left, bottom]], dtype=np.float32)
         crops = list(crops)
-        crops[i] = span
-        read[i] = again
+        crops[i] = strip
+        read[i] = (text[:label.end()].rstrip() + " " + best[0], round(best[1], 3), None)
         for j in row[1:]:
-            read[j] = ("", 0.0, None)  # read as part of the date line
-    return boxes, crops, read
+            read[j] = ("", 0.0, None)  # read as part of the date
+        dated = True
+    return boxes, crops, read, dated
+
+
+_DATE_LEAD = set(":;.,-|/ ")
+_DATE_SEPS = set("/-.|\\, ")
+_DATE_TAIL = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~ ")
+_machines = {}
+
+
+def _date_machine(keys):
+    """The written-date grammar for a recogniser's character list, as a table of moves: what may come
+    before the date (':', spaces), day (1-31), a separator, month (1-12), a separator, year (two
+    figures, or 20xx), and anything but a figure after it. Day first, as on Indian bills: with the
+    month free to be 1-31 a box line next to a '9' made the month '19'. States: 0 before; 1-5 day
+    ('0', '1'/'2', '3', '4'-'9', two figures); 6 separator; 7-11 month ('0', '1', -, '2'-'9', two
+    figures); 12 separator; 13 '2', 14 '0'/'1'/'3', 15 '20', 16 two-figure year, 17 '20x', 18
+    four-figure year; 19 after the date. Returns (model columns, moves, part of each state (0 before,
+    1 date, 2 after), accepting states)."""
+    if id(keys) in _machines:
+        return _machines[id(keys)]
+    allowed = [k for k, ch in enumerate(keys) if k and len(ch) == 1 and (ch in "0123456789" or ch in _DATE_TAIL)]
+
+    def move(s, ch):
+        digit = ch in "0123456789"
+        if s == 0:
+            if digit:
+                return 1 if ch == "0" else 2 if ch in "12" else 3 if ch == "3" else 4
+            return 0 if ch in _DATE_LEAD else -1
+        if 1 <= s <= 5:  # day
+            k = s - 1
+            if digit:
+                return 5 if (k == 0 and ch != "0") or k == 1 or (k == 2 and ch in "01") else -1
+            return 6 if ch in _DATE_SEPS and k != 0 else -1
+        if 7 <= s <= 11:  # month
+            k = s - 7
+            if digit:
+                return 11 if (k == 0 and ch != "0") or (k == 1 and ch in "012") else -1
+            return 12 if ch in _DATE_SEPS and k != 0 else -1
+        if s == 6:
+            if digit:
+                return 7 if ch == "0" else 8 if ch == "1" else 10
+            return 6 if ch in _DATE_SEPS else -1
+        if s == 12:
+            if digit:
+                return 13 if ch == "2" else 14 if ch in "013" else -1
+            return 12 if ch in _DATE_SEPS else -1
+        if s == 13:
+            return (15 if ch == "0" else 16) if digit else -1
+        if s == 14:
+            return 16 if digit else -1
+        if s == 15:
+            return (17 if ch in "0123" else -1) if digit else (19 if ch in _DATE_TAIL else -1)
+        if s == 17:
+            return 18 if digit else -1
+        return 19 if not digit and ch in _DATE_TAIL else -1  # 16, 18, 19
+
+    moves = np.array([[move(s, keys[k]) for k in allowed] for s in range(20)], dtype=np.int32)
+    part = np.array([0] + [1] * 18 + [2])
+    machine = (np.array([0] + allowed), moves, part, np.array([15, 16, 18, 19]))
+    _machines[id(keys)] = machine
+    return machine
+
+
+def _read_date(rec, strip, after_label=False):
+    """(date as 'd/m/y', mean confidence of its figures) read from a strip of the page by one of the
+    recognisers, or None. The model's character scores are decoded with the date grammar
+    (_date_machine): the most likely reading that is a date, rather than the most likely characters
+    ('1R 8 25.' -> '12/8/25', '10 1 7 1 25' -> '10/7/25'). after_label: the strip starts with the
+    printed label, which is skipped (everything up to the label's end as the model reads it)."""
+    keys = rec.postprocess_op.character
+    ratio = max(LINE_MIN_WIDTH, strip.shape[1] / strip.shape[0])
+    pixels = rec.resize_norm_img(strip, ratio)[None].astype(np.float32)
+    probs = np.asarray(rec.session(pixels))[0]
+    if after_label:
+        best = probs.argmax(axis=1)
+        frames = [t for t in range(len(best)) if best[t] and (t == 0 or best[t] != best[t - 1])]
+        text = "".join(keys[best[t]] for t in frames)
+        label = _DATE_WORD.search(text) or re.search(r"[:;]", text[:8])
+        if not label:
+            return None
+        start = frames[label.end() - 1] + 1
+        while start < len(best) and best[start] == best[start - 1]:
+            start += 1
+        probs = probs[start:]
+    if len(probs) < 3:
+        return None
+    cols, moves, part, ends = _date_machine(keys)
+    q, a = moves.shape
+    width = a + 1  # a state is (machine state, last column: 0 blank, 1.. a character)
+    lp = np.log(np.maximum(probs[:, cols], 1e-12))
+    score = np.full((q, width), -1e18)
+    score[0, 0] = 0.0
+    back = np.zeros((len(lp), q * width), dtype=np.int64)
+    src_q, src_c = np.nonzero(moves >= 0)
+    dst = moves[src_q, src_c] * width + src_c + 1
+    stay = np.arange(q * width).reshape(q, width)
+    for t in range(len(lp)):
+        top = np.argsort(score, axis=1)[:, -2:]  # the best two columns of every state
+        new = np.empty_like(score)
+        new[:, 0] = score[np.arange(q), top[:, 1]] + lp[t, 0]  # blank
+        new[:, 1:] = score[:, 1:] + lp[t, 1:]  # the same character again
+        prev = stay.copy()
+        prev[:, 0] = np.arange(q) * width + top[:, 1]
+        # a new character: from the state's best column other than this character
+        from_c = np.where(top[src_q, 1] == src_c + 1, top[src_q, 0], top[src_q, 1])
+        cand = score[src_q, from_c] + lp[t, src_c + 1]
+        flat, prev = new.ravel(), prev.ravel()
+        np.maximum.at(flat, dst, cand)
+        won = cand >= flat[dst]
+        prev[dst[won]] = src_q[won] * width + from_c[won]
+        score = flat.reshape(q, width)
+        back[t] = prev
+    final = score[ends].max()
+    if final < -1e17:
+        return None
+    s = int(np.argmax(np.where(np.isin(np.arange(q * width) // width, ends), score.ravel(), -np.inf)))
+    path = np.empty(len(lp), dtype=np.int64)
+    for t in range(len(lp) - 1, -1, -1):
+        path[t] = s
+        s = back[t][s]
+    chars, confs = [], []
+    for t in range(len(lp)):
+        state, c = divmod(int(path[t]), width)
+        if not c:
+            continue
+        p = float(probs[t, cols[c]])
+        if t and path[t - 1] == path[t]:
+            confs[-1] = max(confs[-1], p)  # the same character, one frame further
+        elif part[state] == 1:
+            chars.append(keys[cols[c]])
+            confs.append(p)
+        else:
+            chars.append(None)
+            confs.append(p)
+    figures = [(ch, p) for ch, p in zip(chars, confs) if ch is not None and ch.isdigit()]
+    groups = re.findall(r"\d+", "".join(ch if ch and ch.isdigit() else " " for ch in chars))
+    if len(groups) != 3 or not figures:
+        return None
+    return "/".join(groups), float(np.mean([p for _, p in figures]))
 
 
 SPLIT_GAP_MIN = 5    # model columns between two letters (the library itself splits words above 5)
@@ -450,8 +715,9 @@ def _words(engine, img, boxes, crops, read, page_index):
     boxes[..., 0] = np.clip(boxes[..., 0], 0, w)
     boxes[..., 1] = np.clip(boxes[..., 1], 0, h)
     # word / character boxes from the character positions, in page coordinates
-    located = engine.cal_rec_boxes(crops, boxes, TextRecOutput(txts=tuple(t for t, _, _ in read),
-                                                               word_results=tuple(p for _, _, p in read)))
+    unplaced = types.SimpleNamespace(line_txt_len=0)  # a date read again: its words are spread evenly
+    located = engine.cal_rec_boxes(crops, boxes, TextRecOutput(
+        txts=tuple(t for t, _, _ in read), word_results=tuple(unplaced if p is None else p for _, _, p in read)))
     parts_of = located.word_results if len(located.word_results) == len(read) else [()] * len(read)
     keep = [k for k, (text, score, _) in enumerate(read) if text.strip() and score >= engine.text_score]
     if not keep:

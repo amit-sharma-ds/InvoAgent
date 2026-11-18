@@ -6,21 +6,36 @@
 {% macro long_label(key) -%}
   {%- if key | length == 7 -%}{{ MONTHS[key[5:7] | int - 1] }} {{ key[0:4] }}{%- else -%}{{ key }}{%- endif -%}
 {%- endmacro %}
+{% macro pct(value, top) -%}{{ (100 * (value or 0) / top) | round(2) }}{%- endmacro %}
 {% block content %}
 <section class="card">
   <div class="result-head">
     <div>
-      <h1>Dashboard</h1>
-      <p class="muted small">Spend by invoice date. Rejected invoices and duplicate copies are not counted.
-        Amounts in different currencies are never added together: pick one currency.</p>
+      <h1>Dashboard{% if d.company == NO_COMPANY %} · No company{% elif d.company %} · {{ d.company }}{% endif %}</h1>
+      <p class="muted small">By invoice date. <strong>Debit</strong> = purchase bills (money the company pays),
+        <strong>credit</strong> = sales bills (money it receives). Rejected invoices and duplicate copies are not
+        counted, and different currencies are never added together.
+        {% if d.company and d.company != NO_COMPANY %}
+          {% if d.company_gstin %}{{ d.company }}'s own GSTIN, found from its invoices: {{ d.company_gstin }}.{% endif %}
+          <a href="{{ url_for('invoices', company=d.company) }}">Open its folder</a>
+        {% endif %}</p>
     </div>
-    {% if d.currencies %}
+    {% if d.currencies or d.companies %}
     <form class="filters dash-filters" method="get" action="{{ url_for('dashboard') }}">
+      <label class="small">Company
+        <select name="company" data-autosubmit>
+          <option value="">All companies</option>
+          {% for c in d.companies %}<option value="{{ c }}" {% if c == d.company %}selected{% endif %}>{{ c }}</option>{% endfor %}
+          {% if d.has_unassigned %}<option value="{{ NO_COMPANY }}" {% if d.company == NO_COMPANY %}selected{% endif %}>No company</option>{% endif %}
+        </select>
+      </label>
+      {% if d.currencies %}
       <label class="small">Currency
         <select name="currency" data-autosubmit>
           {% for c in d.currencies %}<option value="{{ c.currency }}" {% if c.currency == d.currency %}selected{% endif %}>{{ c.currency }} ({{ c.n }})</option>{% endfor %}
         </select>
       </label>
+      {% endif %}
       <label class="small">Period
         <select name="period" data-autosubmit>
           {% for key, text in periods %}<option value="{{ key }}" {% if key == d.period %}selected{% endif %}>{{ text }}</option>{% endfor %}
@@ -34,28 +49,62 @@
 
 {% if not d.currencies %}
 <section class="card empty">
-  <p><strong>No processed invoices yet.</strong> The dashboard fills in as invoices are uploaded.</p>
-  <a class="btn" href="{{ url_for('upload_page') }}">Upload invoices</a>
+  {% if d.no_currency %}
+  <p><strong>{{ d.no_currency }} invoice{{ 's' if d.no_currency != 1 }} {{ 'in this company ' if d.company }}without a
+    currency.</strong> Amounts are only added up per currency: open {{ 'them' if d.no_currency != 1 else 'it' }} and set
+    the currency (for example INR).</p>
+  <a class="btn" href="{{ url_for('invoices', company=d.company) if d.company else url_for('invoices') }}">Open the invoices</a>
+  {% else %}
+  <p><strong>No processed invoices {{ 'in this company ' if d.company }}yet.</strong> The dashboard fills in as invoices are uploaded.</p>
+  <a class="btn" href="{{ url_for('upload_page') }}">Add invoices</a>
+  {% endif %}
 </section>
 {% else %}
 {% set cur = d.currency %}
-<section class="stat-grid">
-  <div class="stat"><span class="stat-num">{{ d.summary.total | amount(cur) or '0.00' }}</span><span>total value ({{ cur }})</span></div>
-  <div class="stat"><span class="stat-num">{{ d.summary.tax | amount(cur) or '0.00' }}</span><span>tax / GST ({{ cur }})</span></div>
-  <div class="stat"><span class="stat-num">{{ d.summary.invoices }}</span><span>invoices</span></div>
-  <div class="stat"><span class="stat-num">{{ d.summary.vendors }}</span><span>vendors</span></div>
+{% set s = d.summary %}
+<section class="kpi-grid viz">
+  <div class="kpi">
+    <span class="kpi-label">Total value</span>
+    <span class="kpi-num">{{ s.total | amount(cur) }}</span>
+    <span class="kpi-sub">{{ cur }} · {{ s.invoices }} invoice{{ 's' if s.invoices != 1 }}</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label"><span class="swatch debit"></span>Debit · purchases</span>
+    <span class="kpi-num">{{ s.debit | amount(cur) }}</span>
+    <span class="kpi-sub">{{ s.debit_n }} bill{{ 's' if s.debit_n != 1 }} · money paid</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label"><span class="swatch credit"></span>Credit · sales</span>
+    <span class="kpi-num">{{ s.credit | amount(cur) }}</span>
+    <span class="kpi-sub">{{ s.credit_n }} bill{{ 's' if s.credit_n != 1 }} · money received</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">Net (credit − debit)</span>
+    <span class="kpi-num">{{ s.net | amount(cur) }}</span>
+    <span class="kpi-sub">{% if s.net > 0 %}more received than paid{% elif s.net < 0 %}more paid than received{% else %}received = paid{% endif %}</span>
+  </div>
+  <div class="kpi">
+    <span class="kpi-label">{{ 'GST payable' if s.gst_net > 0 else 'GST credit (ITC)' }}</span>
+    <span class="kpi-num">{{ (s.gst_net | abs) | amount(cur) }}</span>
+    <span class="kpi-sub">output {{ s.tax_out | amount(cur) }} − input {{ s.tax_in | amount(cur) }}</span>
+  </div>
+  <a class="kpi" href="{{ url_for('invoices', company=d.company) if d.company else url_for('companies') }}">
+    <span class="kpi-label">{{ 'Suppliers' if d.company else 'Companies' }}</span>
+    <span class="kpi-num">{{ s.vendors if d.company else s.companies }}</span>
+    <span class="kpi-sub">{% if not d.company %}{{ s.vendors }} supplier{{ 's' if s.vendors != 1 }} · {% endif %}{{ nav_stats.needs_review }} need{{ 's' if nav_stats.needs_review == 1 }} review</span>
+  </a>
 </section>
 
 <section class="card viz">
-  <h2>Invoice value by {{ 'year' if d.by_year else 'month' }}</h2>
+  <h2>Debit and credit by {{ 'year' if d.by_year else 'month' }} ({{ cur }})</h2>
   <ul class="viz-legend">
-    <li><span class="swatch taxable"></span>Taxable value</li>
-    <li><span class="swatch tax"></span>Tax (GST / VAT)</li>
+    <li><span class="swatch debit"></span>Debit · purchases</li>
+    <li><span class="swatch credit"></span>Credit · sales</li>
   </ul>
-  {% if d.summary.invoices == 0 %}
+  {% if s.invoices == 0 %}
     <p class="muted">No {{ cur }} invoices dated in this period. Try another period.</p>
   {% else %}
-  <div class="vchart" role="img" aria-label="Invoice value by {{ 'year' if d.by_year else 'month' }} in {{ cur }}; the table below has the numbers.">
+  <div class="vchart" role="img" aria-label="Debit and credit by {{ 'year' if d.by_year else 'month' }} in {{ cur }}; the table below has the numbers.">
     <div class="vchart-axis">
       <span>{{ d.axis_max | amount(cur) }}</span><span>{{ (d.axis_max / 2) | amount(cur) }}</span><span>0</span>
     </div>
@@ -63,10 +112,10 @@
       <div class="vchart-grid"><i></i><i></i><i></i></div>
       {% for b in d.buckets %}
         <div class="vbar" tabindex="0"
-             data-tip="{{ long_label(b.key) }}&#10;Taxable {{ b.taxable | amount(cur) }}&#10;Tax {{ b.tax | amount(cur) }}&#10;Total {{ b.total | amount(cur) }} {{ cur }}&#10;{{ b.invoices }} invoice{{ 's' if b.invoices != 1 }}">
-          <div class="vbar-stack" style="height: {{ (100 * b.total / d.axis_max) | round(2) }}%">
-            {% if b.tax > 0 %}<div class="seg tax" style="flex-grow: {{ b.tax }}"></div>{% endif %}
-            {% if b.taxable > 0 %}<div class="seg taxable" style="flex-grow: {{ b.taxable }}"></div>{% endif %}
+             data-tip="{{ long_label(b.key) }}&#10;Debit {{ b.debit | amount(cur) }} (GST {{ b.debit_tax | amount(cur) }})&#10;Credit {{ b.credit | amount(cur) }} (GST {{ b.credit_tax | amount(cur) }})&#10;{{ b.invoices }} invoice{{ 's' if b.invoices != 1 }}">
+          <div class="vbar-pair">
+            <div class="b debit{% if b.debit > 0 %} nz{% endif %}" style="height: {{ pct(b.debit, d.axis_max) }}%"></div>
+            <div class="b credit{% if b.credit > 0 %} nz{% endif %}" style="height: {{ pct(b.credit, d.axis_max) }}%"></div>
           </div>
           <span class="vbar-label">{{ label(b.key) }}</span>
         </div>
@@ -75,35 +124,99 @@
   </div>
   {% if d.undated %}<p class="muted small">{{ d.undated }} {{ cur }} invoice{{ 's' if d.undated != 1 }} without a date
     {{ 'are' if d.undated != 1 else 'is' }} not in this chart (see the <a href="{{ url_for('invoices', review='1') }}">Review queue</a>).</p>{% endif %}
+  {% if d.no_currency %}<p class="muted small">{{ d.no_currency }} invoice{{ 's' if d.no_currency != 1 }} without a currency
+    {{ 'are' if d.no_currency != 1 else 'is' }} not counted anywhere on this page: open
+    {{ 'them' if d.no_currency != 1 else 'it' }} in the <a href="{{ url_for('invoices', company=d.company) if d.company else url_for('invoices') }}">Invoices</a>
+    list and set the currency.</p>{% endif %}
   <details>
     <summary>Show as a table</summary>
     <div class="table-wrap"><table class="kv">
-      <thead><tr><th>{{ 'Year' if d.by_year else 'Month' }}</th><th class="num">Invoices</th><th class="num">Taxable</th><th class="num">Tax</th><th class="num">Total</th></tr></thead>
+      <thead><tr><th>{{ 'Year' if d.by_year else 'Month' }}</th><th class="num">Invoices</th><th class="num">Debit</th>
+        <th class="num">Credit</th><th class="num">Input GST</th><th class="num">Output GST</th></tr></thead>
       <tbody>
         {% for b in d.buckets %}<tr><td>{{ long_label(b.key) }}</td><td class="num">{{ b.invoices }}</td>
-          <td class="num">{{ b.taxable | amount(cur) }}</td><td class="num">{{ b.tax | amount(cur) }}</td><td class="num">{{ b.total | amount(cur) }}</td></tr>{% endfor %}
+          <td class="num">{{ b.debit | amount(cur) }}</td><td class="num">{{ b.credit | amount(cur) }}</td>
+          <td class="num">{{ b.debit_tax | amount(cur) }}</td><td class="num">{{ b.credit_tax | amount(cur) }}</td></tr>{% endfor %}
       </tbody>
     </table></div>
   </details>
   {% endif %}
 </section>
 
+{% if not d.company and d.company_rows %}
 <section class="card viz">
-  <h2>Top vendors ({{ cur }})</h2>
-  {% if d.vendors %}
+  <div class="result-head">
+    <h2>Company-wise ({{ cur }})</h2>
+    <a class="small" href="{{ url_for('companies') }}">All company folders</a>
+  </div>
+  <ul class="viz-legend">
+    <li><span class="swatch debit"></span>Debit · purchases</li>
+    <li><span class="swatch credit"></span>Credit · sales</li>
+  </ul>
   <ul class="hbars">
-    {% for v in d.vendors %}
-      <li data-href="{{ url_for('invoices', q=v.gstin or v.name) }}" tabindex="0"
-          title="{{ v.name }}: {{ v.total | amount(cur) }} {{ cur }} in {{ v.invoices }} invoice{{ 's' if v.invoices != 1 }}">
-        <span class="hbar-name">{{ v.name }}{% if v.gstin %} <span class="muted small">{{ v.gstin }}</span>{% endif %}</span>
-        <span class="hbar-track"><span class="hbar" style="width: {{ (100 * (v.total or 0) / d.vendor_max) | round(2) }}%"></span></span>
-        <span class="hbar-value">{{ v.total | amount(cur) }}<span class="muted small"> · {{ v.invoices }}</span></span>
+    {% for c in d.company_rows %}
+      <li data-href="{{ url_with('dashboard', company=c.name or NO_COMPANY) }}" tabindex="0"
+          title="{{ c.name or 'No company' }}: debit {{ c.debit | amount(cur) }}, credit {{ c.credit | amount(cur) }} {{ cur }} in {{ c.invoices }} invoice{{ 's' if c.invoices != 1 }}">
+        <span class="hbar-name">{{ c.name or 'No company' }}{% if c.gstin %} <span class="muted small">{{ c.gstin }}</span>{% endif %}</span>
+        <span class="hbar-track pair">
+          <span class="hbar debit{% if not c.debit %} zero{% endif %}" style="width: {{ pct(c.debit, d.company_max) }}%"></span>
+          <span class="hbar credit{% if not c.credit %} zero{% endif %}" style="width: {{ pct(c.credit, d.company_max) }}%"></span>
+        </span>
+        <span class="hbar-value pair"><span><i class="swatch debit"></i> {{ c.debit | amount(cur) }}</span>
+          <span><i class="swatch credit"></i> {{ c.credit | amount(cur) }}</span></span>
       </li>
     {% endfor %}
   </ul>
-  {% else %}
-    <p class="muted">No vendors in this period.</p>
-  {% endif %}
+  <details>
+    <summary>Show as a table</summary>
+    <div class="table-wrap"><table class="kv">
+      <thead><tr><th>Company</th><th class="num">Invoices</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Net</th></tr></thead>
+      <tbody>
+        {% for c in d.company_rows %}<tr><td>{{ c.name or 'No company' }}</td><td class="num">{{ c.invoices }}</td>
+          <td class="num">{{ c.debit | amount(cur) }}</td><td class="num">{{ c.credit | amount(cur) }}</td>
+          <td class="num">{{ c.net | amount(cur) }}</td></tr>{% endfor %}
+      </tbody>
+    </table></div>
+  </details>
+</section>
+{% endif %}
+
+<section class="dash-pair">
+  <div class="card viz">
+    <h2>Top suppliers · debit ({{ cur }})</h2>
+    {% if d.vendors %}
+    <ul class="hbars">
+      {% for v in d.vendors %}
+        <li data-href="{{ url_for('invoices', q=v.gstin or v.name, company=d.company) }}" tabindex="0"
+            title="{{ v.name }}: {{ v.total | amount(cur) }} {{ cur }} in {{ v.invoices }} invoice{{ 's' if v.invoices != 1 }}">
+          <span class="hbar-name">{{ v.name }}{% if v.gstin %} <span class="muted small">{{ v.gstin }}</span>{% endif %}</span>
+          <span class="hbar-track"><span class="hbar debit" style="width: {{ pct(v.total, d.vendor_max) }}%"></span></span>
+          <span class="hbar-value">{{ v.total | amount(cur) }}<span class="muted small"> · {{ v.invoices }}</span></span>
+        </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+      <p class="muted">No purchase bills in this period.</p>
+    {% endif %}
+  </div>
+  <div class="card viz">
+    <h2>Top customers · credit ({{ cur }})</h2>
+    {% if d.customers %}
+    <ul class="hbars">
+      {% for v in d.customers %}
+        <li data-href="{{ url_for('invoices', q=v.gstin or v.name, company=d.company) }}" tabindex="0"
+            title="{{ v.name }}: {{ v.total | amount(cur) }} {{ cur }} in {{ v.invoices }} invoice{{ 's' if v.invoices != 1 }}">
+          <span class="hbar-name">{{ v.name }}{% if v.gstin %} <span class="muted small">{{ v.gstin }}</span>{% endif %}</span>
+          <span class="hbar-track"><span class="hbar credit" style="width: {{ pct(v.total, d.customer_max) }}%"></span></span>
+          <span class="hbar-value">{{ v.total | amount(cur) }}<span class="muted small"> · {{ v.invoices }}</span></span>
+        </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+      <p class="muted">No sales bills in this period. An invoice counts as a sale when its company is the seller;
+        set it on the invoice page if it was not found.</p>
+    {% endif %}
+  </div>
 </section>
 {% endif %}
 {% endblock %}

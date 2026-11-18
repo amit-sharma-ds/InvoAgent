@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_company.html" import company_input with context %}
 {% block content %}
 <section class="card">
   <div class="result-head">
@@ -18,6 +19,11 @@
   <form class="filters" method="get" action="{{ url_for('invoices') }}">
     <input type="search" name="q" value="{{ filters.q or '' }}"
            placeholder="Search invoice no, seller, buyer, GSTIN or file name">
+    <select name="company" aria-label="Company">
+      <option value="">All companies</option>
+      {% for c in companies %}<option value="{{ c }}" {% if filters.company == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
+      <option value="{{ NO_COMPANY }}" {% if filters.company == NO_COMPANY %}selected{% endif %}>No company</option>
+    </select>
     <select name="status">
       <option value="">All statuses</option>
       {% for s in statuses %}<option value="{{ s }}" {% if filters.status == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
@@ -29,7 +35,7 @@
     <label class="small"><input type="checkbox" name="review" value="1" {% if filters.review %}checked{% endif %}> Needs review only</label>
     {% if filters.batch_id %}<input type="hidden" name="batch" value="{{ filters.batch_id }}">{% endif %}
     <button class="btn" type="submit">Filter</button>
-    {% if filters.q or filters.status or filters.review or filters.batch_id or filters.review_status %}
+    {% if filters.q or filters.status or filters.review or filters.batch_id or filters.review_status or filters.company %}
       <a class="small" href="{{ url_for('invoices') }}">Clear filters</a>
     {% endif %}
   </form>
@@ -44,8 +50,11 @@
   <div class="result-head">
     <p class="muted small">Click a row to open the invoice. Every invoice has the same columns; a grey
       <span class="null">null</span> means the field was not found. Highlighted rows need a human check.</p>
-    <form id="bulk-delete" method="post" action="{{ url_for('delete_invoices') }}"
+    <form id="bulk-delete" class="bulk-actions" method="post" action="{{ url_for('delete_invoices') }}"
           data-confirm="Delete the selected invoices and their files? This cannot be undone.">
+      {{ company_input('', id='move-company', placeholder='Company to move to') }}
+      <button class="btn secondary" type="submit" id="bulk-move-btn" formaction="{{ url_for('move_invoices') }}"
+              data-no-confirm disabled>Move selected</button>
       <button class="btn danger" type="submit" id="bulk-delete-btn" disabled>Delete selected</button>
     </form>
   </div>
@@ -72,7 +81,7 @@
             {% endfor %}
           </tr>
         {% else %}
-          <tr><td colspan="{{ columns | length + 1 }}" class="muted">No invoices yet. Upload some on the Upload page.</td></tr>
+          <tr><td colspan="{{ columns | length + 1 }}" class="muted">No invoices yet. Add some on the Add invoices page.</td></tr>
         {% endfor %}
       </tbody>
     </table>

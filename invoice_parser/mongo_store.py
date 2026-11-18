@@ -30,6 +30,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import config
+from .companies import ENTRY_TYPES, MONEY_FIELDS, NO_COMPANY, build_dashboard
 from .storage import (EXPORT_COLUMNS, INVOICE_COLUMNS, REVIEW_STATUSES, STATUSES, TABLE_COLUMNS, _minutes_ago,
                       _now, corrections, flatten, invoice_key)
 
@@ -131,7 +132,7 @@ class MongoInvoiceStore:
         self.invoices, self.batches, self.counters = self.db.invoices, self.db.batches, self.db.counters
         self.fs = gridfs.GridFSBucket(self.db, bucket_name="files")
         for field, unique in (("id", True), ("file_sha256", True), ("status", False), ("invoice_key", False),
-                              ("batch_ids", False)):
+                              ("batch_ids", False), ("company", False)):
             self.invoices.create_index(field, unique=unique)
         self.batches.create_index("id", unique=True)
         self._uploads = queue.Queue()
@@ -155,10 +156,11 @@ class MongoInvoiceStore:
         self.batches.insert_one({"id": batch_id, "name": name, "source": source, "created_at": _now()})
         return batch_id
 
-    def add_file(self, file_name, data, batch_id=None, queue=True):
+    def add_file(self, file_name, data, batch_id=None, queue=True, company=None):
         """Store a file. Returns (invoice_id, is_new). A file whose content is already stored is not
-        added again (is_new=False) but is still recorded as part of the batch. queue=False keeps a
-        new file out of the background queue so the caller can process it right away."""
+        added again (is_new=False) but is still recorded as part of the batch (and put in the company
+        when it has none). queue=False keeps a new file out of the background queue so the caller can
+        process it right away."""
         from pymongo.errors import DuplicateKeyError
 
         sha = hashlib.sha256(data).hexdigest()
@@ -174,7 +176,8 @@ class MongoInvoiceStore:
             doc.update(id=self._next_id("invoices"), batch_id=batch_id, file_name=Path(file_name).name,
                        file_sha256=sha, stored_path=rel, status="queued" if queue else "processing",
                        created_at=_now(), started_at=None if queue else _now(), review_status="pending",
-                       edited=0, line_items=[], batch_ids=[batch_id] if batch_id else [], file_stored=False)
+                       edited=0, line_items=[], batch_ids=[batch_id] if batch_id else [], file_stored=False,
+                       company=company or None)
             try:
                 self.invoices.insert_one(doc)
             except DuplicateKeyError:  # the same file added at the same moment elsewhere
@@ -189,6 +192,8 @@ class MongoInvoiceStore:
                 return doc["id"], True
         if batch_id:
             self.invoices.update_one({"id": existing["id"]}, {"$addToSet": {"batch_ids": batch_id}})
+        if company:
+            self.invoices.update_one({"id": existing["id"], "company": None}, {"$set": {"company": company}})
         return existing["id"], False
 
     def file_path(self, row) -> Path:
@@ -352,8 +357,10 @@ class MongoInvoiceStore:
 
     # --- reading -----------------------------------------------------------------------
     @staticmethod
-    def _match(q=None, status=None, review=None, batch_id=None, review_status=None):
+    def _match(q=None, status=None, review=None, batch_id=None, review_status=None, company=None):
         m = {}
+        if company:
+            m["company"] = None if company == NO_COMPANY else company
         if review_status in REVIEW_STATUSES:
             m["review_status"] = {"$in": [None, "pending"]} if review_status == "pending" else review_status
         if q:
@@ -372,8 +379,9 @@ class MongoInvoiceStore:
     def _projection(columns):
         return {"_id": 0, **{c: 1 for c in columns}}
 
-    def search(self, q=None, status=None, review=None, batch_id=None, review_status=None, limit=50, offset=0):
-        m = self._match(q, status, review, batch_id, review_status)
+    def search(self, q=None, status=None, review=None, batch_id=None, review_status=None, company=None,
+               limit=50, offset=0):
+        m = self._match(q, status, review, batch_id, review_status, company)
         total = self.invoices.count_documents(m)
         docs = self.invoices.find(m, self._projection(TABLE_COLUMNS)).sort("id", -1).skip(offset).limit(limit)
         return total, [self._row(d, TABLE_COLUMNS) for d in docs]
@@ -387,13 +395,14 @@ class MongoInvoiceStore:
                              for it in sorted(doc.get("line_items") or [], key=lambda it: it["line_no"])]
         return out
 
-    def export_rows(self, q=None, status=None, review=None, batch_id=None, review_status=None):
-        m = self._match(q, status, review, batch_id, review_status)
+    def export_rows(self, q=None, status=None, review=None, batch_id=None, review_status=None, company=None):
+        m = self._match(q, status, review, batch_id, review_status, company)
         return [self._row(d, EXPORT_COLUMNS)
                 for d in self.invoices.find(m, self._projection(EXPORT_COLUMNS)).sort("id", 1)]
 
-    def export_line_items(self, q=None, status=None, review=None, batch_id=None, review_status=None):
-        m = self._match(q, status, review, batch_id, review_status)
+    def export_line_items(self, q=None, status=None, review=None, batch_id=None, review_status=None,
+                          company=None):
+        m = self._match(q, status, review, batch_id, review_status, company)
         out = []
         fields = {"_id": 0, "id": 1, "invoice_number": 1, "seller_name": 1, "currency": 1, "line_items": 1}
         for d in self.invoices.find(m, fields).sort("id", 1):
@@ -511,73 +520,40 @@ class MongoInvoiceStore:
         return {**stats, "review": review, "duplicates": duplicates, "totals": _by_total_desc(totals),
                 "recent": recent_rows}
 
-    def dashboard(self, currency=None, period="12m", today=None):
-        """Figures for the Dashboard tab, for ONE currency (amounts in different currencies are never
-        added together) and one period of invoice dates (see InvoiceStore.dashboard)."""
-        today = today or datetime.now().date()
-        currencies = [{"currency": r["_id"], "n": r["n"]} for r in self.invoices.aggregate([
-            {"$match": _and(_COUNTED, {"currency": {"$ne": None}})},
-            {"$group": {"_id": "$currency", "n": {"$sum": 1}, "last": {"$max": "$id"}}},
-            {"$sort": {"n": -1, "last": -1}}])]  # tie: the latest invoice's currency
-        if not currencies:
-            return {"currencies": [], "currency": None, "period": period, "buckets": [], "vendors": [],
-                    "summary": None, "undated": 0}
-        if currency not in {c["currency"] for c in currencies}:
-            currency = currencies[0]["currency"]
+    def dashboard(self, currency=None, period="12m", today=None, company=None):
+        """Figures for the Dashboard tab (see companies.build_dashboard)."""
+        return build_dashboard(self.money_rows(), currency, period, today, company, self.company_names())
 
-        fy_start = today.year if today.month >= 4 else today.year - 1  # Indian financial year
-        month_keys = None
-        if period == "fy":
-            start, end = f"{fy_start}-04-01", f"{fy_start + 1}-03-31"
-            month_keys = [f"{fy_start + (m > 12)}-{(m - 1) % 12 + 1:02d}" for m in range(4, 16)]
-        elif period == "lfy":
-            start, end = f"{fy_start - 1}-04-01", f"{fy_start}-03-31"
-            month_keys = [f"{fy_start - 1 + (m > 12)}-{(m - 1) % 12 + 1:02d}" for m in range(4, 16)]
-        elif period == "all":
-            start, end = "0000-01-01", "9999-12-31"
-        else:
-            period = "12m"
-            y, m = today.year, today.month
-            month_keys = []
-            for _ in range(12):
-                month_keys.insert(0, f"{y}-{m:02d}")
-                y, m = (y, m - 1) if m > 1 else (y - 1, 12)
-            start, end = f"{month_keys[0]}-01", f"{today.year}-{today.month:02d}-31"
+    # --- companies (folders) ------------------------------------------------------------
+    def money_rows(self, company=None):
+        """The counted invoices with the fields the dashboard and the company folders need."""
+        docs = self.invoices.find(_and(_COUNTED, self._match(company=company)), self._projection(MONEY_FIELDS))
+        return [self._row(d, MONEY_FIELDS) for d in docs.sort("id", 1)]
 
-        where = _and(_COUNTED, {"currency": currency, "invoice_date": {"$gte": start, "$lte": end}})
-        width = 7 if month_keys is not None else 4
-        tax_sum = {"$sum": {"$ifNull": ["$tax", 0]}}
-        rows = {r["_id"]: r for r in self.invoices.aggregate([
-            {"$match": where},
-            {"$group": {"_id": {"$substrCP": ["$invoice_date", 0, width]}, "invoices": {"$sum": 1},
-                        "total": {"$sum": "$total"}, "tax": tax_sum}}])}
-        keys = month_keys if month_keys is not None else sorted(rows)
-        buckets = []
-        for k in keys:
-            r = rows.get(k, {"invoices": 0, "total": 0.0, "tax": 0.0})
-            total, tax = r["total"] or 0.0, r["tax"] or 0.0
-            buckets.append({"key": k, "invoices": r["invoices"], "total": round(total, 2),
-                            "tax": round(tax, 2), "taxable": round(total - tax, 2)})
-        total, total_n = _sum("$total")
-        vendors = _by_total_desc([_none_if_empty({"vendor_key": r.pop("_id"), **r}, "total")
-                                  for r in self.invoices.aggregate([
-                                      {"$match": _and(where, {"seller_name": {"$ne": None}})},
-                                      {"$group": {"_id": _VENDOR_KEY, "name": {"$max": "$seller_name"},
-                                                  "gstin": {"$max": "$seller_tax_id"}, "invoices": {"$sum": 1},
-                                                  "total": total, "total_n": total_n, "tax": tax_sum}}])])[:10]
-        summary = next(self.invoices.aggregate([
-            {"$match": where},
-            {"$group": {"_id": None, "invoices": {"$sum": 1}, "total": total, "total_n": total_n, "tax": tax_sum,
-                        "keys": {"$addToSet": _VENDOR_KEY}}}]), None)
-        if summary:
-            summary = _none_if_empty({"invoices": summary["invoices"], "total": summary["total"],
-                                      "total_n": summary["total_n"], "tax": summary["tax"],
-                                      "vendors": len(summary["keys"])}, "total")
-        else:
-            summary = {"invoices": 0, "total": None, "tax": None, "vendors": 0}
-        undated = self.invoices.count_documents(_and(_COUNTED, {"currency": currency, "invoice_date": None}))
-        return {"currencies": currencies, "currency": currency, "period": period, "buckets": buckets,
-                "vendors": vendors, "summary": summary, "undated": undated, "by_year": month_keys is None}
+    def company_names(self):
+        return sorted((c for c in self.invoices.distinct("company") if c), key=str.lower)
+
+    def company_counts(self):
+        """{company or None: {"invoices", "needs_review", "last_added"}}, one entry per company folder."""
+        return {r["_id"]: {"invoices": r["n"], "needs_review": r["review"], "last_added": r["last"]}
+                for r in self.invoices.aggregate([
+                    {"$group": {"_id": {"$ifNull": ["$company", None]}, "n": {"$sum": 1},
+                                "review": {"$sum": {"$cond": [{"$eq": ["$needs_review", 1]}, 1, 0]}},
+                                "last": {"$max": "$created_at"}}}])}
+
+    def set_company(self, invoice_ids, company, entry_type=None):
+        """Move invoices to a company (None: no company). entry_type None: the side is found again."""
+        ids = [int(i) for i in invoice_ids]
+        if not ids:
+            return 0
+        return self.invoices.update_many({"id": {"$in": ids}}, {"$set": {
+            "company": company or None, "entry_type": entry_type if entry_type in ENTRY_TYPES else None}}).matched_count
+
+    def files_of(self, company):
+        """The stored files of a company folder (NO_COMPANY: of the invoices without a company)."""
+        cols = ["id", "file_name", "file_sha256", "stored_path"]
+        return [self._row(d, cols) for d in
+                self.invoices.find(self._match(company=company or NO_COMPANY), self._projection(cols)).sort("id", 1)]
 
     def vendors(self):
         """One row per seller (by GSTIN, else by name) and currency."""

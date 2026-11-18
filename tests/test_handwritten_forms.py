@@ -294,3 +294,106 @@ def test_short_item_header_and_numbers_written_by_hand(matcher):
 def test_description_look_alikes():
     assert nz.fix_item_words("Carrier 1.STNSAC") == "Carrier 1.5TN SAC"
     assert nz.fix_item_words("Carrier QTN Split Alc") == "Carrier 2TN Split A/c"
+
+
+def test_a_party_approved_before_no_longer_sends_the_invoice_to_review(tmp_path):
+    """The app learns from approvals: a party read as approved before for its GSTIN is sure."""
+    from invoice_parser.storage import InvoiceStore, known_party_names
+
+    store = InvoiceStore(db_path=tmp_path / "t.db", files_dir=tmp_path / "files")
+    approved = {"fields": {"invoice_number": {"value": "A1"}, "seller": {"value": {"name": "Kavya Infotech",
+                "tax_id": "06BKXPT4822Q3ZY"}}}, "line_items": [], "checks": {}, "warnings": [], "overall_confidence": 0.9}
+    invoice_id, _ = store.add_file("a.pdf", b"a", queue=False)
+    store.save_result(invoice_id, approved, 1)
+    store.set_review(invoice_id, "approved")
+    fields = {"invoice_number": {"value": "A2", "confidence": 0.85}, "invoice_date": {"value": "2026-09-12", "confidence": 0.9},
+              "seller": {"value": {"name": "kavya infotech", "tax_id": "06BKXPT4822Q3ZY"}, "confidence": 0.4},
+              "total": {"value": 100.0, "confidence": 0.9}}
+    result = {"fields": fields, "warnings": [], "overall_confidence": 0.763}
+    known_party_names(result, store)
+    assert fields["seller"]["confidence"] == 0.95 and result["overall_confidence"] == 0.9
+    fields["seller"] = {"value": {"name": "Kavya Infotach", "tax_id": "06BKXPT4822Q3ZY"}, "confidence": 0.4}
+    known_party_names(result, store)  # put back from a misreading: a little less sure
+    assert fields["seller"]["value"]["name"] == "Kavya Infotech" and fields["seller"]["confidence"] == 0.9
+
+
+def test_amounts_that_add_up_are_sure_unless_the_app_mended_them():
+    from invoice_parser.extract import _confirm_amounts
+
+    def amounts(label="Total"):
+        return {"subtotal": {"value": 100.0, "confidence": 0.5, "source_label": "Subtotal"},
+                "tax": {"value": 18.0, "confidence": 0.6, "source_label": "Tax"},
+                "total": {"value": 118.0, "confidence": 0.7, "source_label": label}}
+    adds_up = {"subtotal_plus_tax_minus_discount_equals_total": True}
+    f = amounts()
+    _confirm_amounts(f, adds_up, [])
+    assert [f[k]["confidence"] for k in ("subtotal", "tax", "total")] == [0.9, 0.9, 0.9]
+    f = amounts()
+    _confirm_amounts(f, {**adds_up, "line_items_sum_equals_subtotal": True}, [])
+    assert f["tax"]["confidence"] == 0.95
+    f = amounts()  # a figure the app mended: a person still checks it
+    _confirm_amounts(f, {**adds_up, "line_items_sum_equals_subtotal": True}, ["Tax was read as 1.00 and set to 18.00: x. Please check."])
+    assert f["tax"]["confidence"] == 0.6
+    f = amounts("(total - tax, matches line items)")  # worked out, not read
+    _confirm_amounts(f, adds_up, [])
+    assert f["total"]["confidence"] == 0.7
+    f = amounts()
+    _confirm_amounts(f, {"subtotal_plus_tax_minus_discount_equals_total": False, "total_matches_amount_in_words": True}, [])
+    assert (f["total"]["confidence"], f["tax"]["confidence"]) == (0.95, 0.6)
+
+
+def _date_strip_reader(frames):
+    """A stand-in recogniser whose character scores are given frame by frame ({character: score})."""
+    import types
+
+    keys = ["blank"] + list("0123456789/-.:|RDate") + [" "]
+    probs = np.full((len(frames), len(keys)), 1e-4)
+    for t, frame in enumerate(frames):
+        for ch, p in frame.items():
+            probs[t, keys.index(ch)] = p
+    probs /= probs.sum(axis=1, keepdims=True)
+    return types.SimpleNamespace(postprocess_op=types.SimpleNamespace(character=keys),
+                                 resize_norm_img=lambda img, ratio: np.zeros((3, 48, 192), np.float32),
+                                 session=lambda pixels: probs[None])
+
+
+def test_a_handwritten_date_is_read_as_a_date():
+    """'Date:1R 8 25.' and '10 1 7 1 25' (the form's box lines read as '1') were not found or found wrong:
+    the strip's character scores are decoded with the date grammar (day, month 1-12, year), so the most
+    likely reading that is a date wins, with the mean score of its figures."""
+    from invoice_parser.fast_ocr import _read_date
+
+    strip = np.zeros((40, 200, 3), np.uint8)
+    gap = {"blank": 0.9}
+    unsure_two = [{"1": .9}, gap, {"R": .6, "2": .35}, gap, {" ": .9}, {"8": .9}, gap, {" ": .9},
+                  {"2": .9}, gap, {"5": .9}, {".": .8}]
+    date, conf = _read_date(_date_strip_reader(unsure_two), strip)
+    assert date == "12/8/25" and 0.5 < conf < 0.9  # less sure: the 2 was read as an R first
+
+    box_lines = [{"1": .9}, {"0": .9}, gap, {" ": .6}, {"1": .7, "|": .25}, {" ": .6}, {"7": .9}, gap,
+                 {" ": .6}, {"1": .7, "|": .25}, {" ": .6}, {"2": .9}, {"5": .9}]
+    assert _read_date(_date_strip_reader(box_lines), strip)[0] == "10/7/25"
+
+    label = [{"D": .9}, {"a": .9}, {"t": .9}, {"e": .9}, {":": .9}, gap]
+    assert _read_date(_date_strip_reader(label + unsure_two), strip, after_label=True)[0] == "12/8/25"
+    assert _read_date(_date_strip_reader([{"R": .9}, gap, {"D": .9}]), strip) is None  # no date at all
+
+
+def test_only_a_doubtful_date_is_read_again():
+    from invoice_parser.fast_ocr import _plain_date
+
+    for plain in ("12 8 25", " 12/08/2025", "12 Aug 2025", "2025-08-12", "12.8.25."):
+        assert _plain_date(plain), plain
+    for doubtful in ("1R 8 25.", "10 1 7 1 25", " 08 12025", "7710812025", "12 25"):
+        assert not _plain_date(doubtful), doubtful
+
+
+def test_a_less_sure_rereading_may_turn_letters_into_digits_but_not_spoil_a_number():
+    from invoice_parser.fast_ocr import _adds_digits, _spoils_number
+
+    # what the larger model is for: digits hidden in letters
+    assert not _adds_digits("380S", "3805") and not _adds_digits("4R88", "42288") and not _spoils_number("4R88", "42288")
+    assert not _spoils_number("068KXPT4822Q3ZY", "06BKXPT4822Q3ZY")  # letters of a GSTIN may change
+    assert not _spoils_number("S0FTECH", "SOFTECH")  # and a zero in a word
+    # what it must not do to a number read surely
+    assert _adds_digits("49900t", "499900t") and _spoils_number("Date:12", "Date:1R")

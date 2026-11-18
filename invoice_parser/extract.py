@@ -1228,6 +1228,36 @@ def _one_digit_apart(a, b):
     return len(x) == len(y) and sum(p != q for p, q in zip(x, y)) == 1
 
 
+def overall_confidence(fields):
+    """The invoice's confidence: the mean of its required fields' (a missing one counts as 0)."""
+    confs = [fields[n].get("confidence") or 0.0 for n in REQUIRED_FIELDS if fields.get(n)]
+    return round(sum(confs) / len(REQUIRED_FIELDS), 3) if confs else 0.0
+
+
+AMOUNTS_ADD_UP = 0.9      # subtotal + tax = total, all three read from the page
+AMOUNTS_CONFIRMED = 0.95  # ... and the line items add up to the subtotal too (or the words give the total)
+
+
+def _confirm_amounts(fields, checks, warnings):
+    """Amounts read from the page that the invoice's own arithmetic confirms are sure, however faint
+    their handwriting was: three separate readings that add up exactly are not misread. Nothing
+    repaired or worked out by the app counts (those carry a 'Please check' warning or a label in
+    brackets), so a mended figure still sends the invoice to a person."""
+    names = ("subtotal", "tax", "total")
+    if any(fields.get(n) is None for n in names) or any("Please check" in w for w in warnings):
+        return
+    if any((fields[n].get("source_label") or "").startswith("(") for n in names):
+        return
+    in_words = checks.get("total_matches_amount_in_words") is True
+    if checks.get("subtotal_plus_tax_minus_discount_equals_total") is True:
+        floor = AMOUNTS_CONFIRMED if checks.get("line_items_sum_equals_subtotal") is True or in_words \
+            else AMOUNTS_ADD_UP
+        for n in names:
+            fields[n]["confidence"] = max(fields[n]["confidence"] or 0, floor)
+    elif in_words:
+        fields["total"]["confidence"] = max(fields["total"]["confidence"] or 0, AMOUNTS_CONFIRMED)
+
+
 def _correct(field, new_value, why, warnings, name):
     old = field["value"]
     field["value"] = round(new_value, 2)
@@ -1567,8 +1597,8 @@ def extract_invoice(lines, matcher):
         if fields.get(name) is None:
             warnings.append(f"Could not find {name.replace('_', ' ')}.")
 
-    confs = [fields[n]["confidence"] for n in REQUIRED_FIELDS if fields.get(n)]
-    overall = round(sum(confs) / len(REQUIRED_FIELDS), 3) if confs else 0.0
+    _confirm_amounts(fields, checks, warnings)
+    overall = overall_confidence(fields)
     return {
         "fields": fields,
         "line_items": items,

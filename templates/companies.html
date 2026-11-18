@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <h1>Companies</h1>
+  <p class="muted small">One folder per company. An invoice goes into the folder picked in the <em>Company</em> box when it
+    is uploaded (Add invoices page); left empty, into the known company whose name or GSTIN it shows.
+    Move invoices on the Invoices page (select rows, <em>Move selected</em>) or on the invoice itself.
+    Debit = purchase bills, credit = sales bills.</p>
+  <div class="actions">
+    <a class="btn" href="{{ url_for('upload_page') }}">Add invoices to a company</a>
+    <a class="btn secondary" href="{{ url_for('dashboard') }}">Company-wise dashboard</a>
+  </div>
+</section>
+
+{% if folders %}
+<section class="folder-grid">
+  {% for f in folders %}
+    {% set key = f.name or NO_COMPANY %}
+    <article class="card folder">
+      <a class="folder-head" href="{{ url_for('invoices', company=key) }}">
+        <svg class="folder-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4h4l2 2.2h7A2.5 2.5 0 0 1 21 8.7v8.8a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 17.5z"/></svg>
+        <span>
+          <strong class="folder-name">{{ f.name or 'No company' }}</strong>
+          <span class="muted small">{{ f.invoices }} invoice{{ 's' if f.invoices != 1 }}{% if f.needs_review %} · {{ f.needs_review }} need{{ 's' if f.needs_review == 1 }} review{% endif %}</span>
+        </span>
+      </a>
+      {% if f.gstin %}<p class="muted small folder-gstin">GSTIN {{ f.gstin }}</p>{% endif %}
+      {% if f.currency %}
+      <dl class="folder-money">
+        <div><dt><span class="swatch debit"></span>Debit</dt><dd>{{ f.debit | amount(f.currency) }}</dd></div>
+        <div><dt><span class="swatch credit"></span>Credit</dt><dd>{{ f.credit | amount(f.currency) }}</dd></div>
+      </dl>
+      <p class="muted small">{{ f.currency }}{% if f.other_currencies %} · also {{ f.other_currencies | join(', ') }}{% endif %}
+        · last added {{ (f.last_added or '')[:10] }}</p>
+      {% else %}
+      <p class="muted small">No processed amounts yet · last added {{ (f.last_added or '')[:10] }}</p>
+      {% endif %}
+      <div class="actions">
+        <a class="btn secondary" href="{{ url_for('invoices', company=key) }}">Open</a>
+        <a class="btn secondary" href="{{ url_for('dashboard', company=key) }}">Dashboard</a>
+        <a class="btn secondary" href="{{ url_for('export_invoices_xlsx', company=key) }}">Excel</a>
+        <a class="btn secondary" href="{{ url_for('company_files_zip', company=key) }}">Files (ZIP)</a>
+      </div>
+    </article>
+  {% endfor %}
+</section>
+{% else %}
+<section class="card empty">
+  <p><strong>No invoices yet.</strong> Type a company name in the Company box when you upload; its folder appears here.</p>
+  <a class="btn" href="{{ url_for('upload_page') }}">Add invoices</a>
+</section>
+{% endif %}
+{% endblock %}

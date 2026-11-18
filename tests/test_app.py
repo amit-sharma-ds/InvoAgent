@@ -34,14 +34,16 @@ def _upload(client, data, name):
 
 
 def test_pages_render(client):
-    for url in ["/", "/dashboard", "/upload", "/invoices", "/invoices?review=1", "/data", "/vendors", "/camera"]:
+    for url in ["/", "/dashboard", "/upload", "/invoices", "/invoices?review=1", "/data", "/vendors",
+                "/companies", "/dashboard?company=-", "/invoices?company=-"]:
         assert client.get(url).status_code == 200, url
 
 
 def test_sidebar_has_tabs_and_no_demo_workspace(client):
     html = client.get("/").data.decode("utf-8")
-    for tab in ["Overview", "Upload", "Invoices", "Review queue", "Data sheet", "Vendors", "Phone camera"]:
+    for tab in ["Overview", "Dashboard", "Companies", "Add invoices", "Invoices", "Review queue", "Data sheet", "Vendors"]:
         assert tab in html
+    assert "Phone camera</a>" not in html  # the camera page is part of Add invoices
     assert "/workspace/" not in html and "Demo" not in html  # the Demo workspace was removed
     assert client.post("/workspace/demo").status_code == 404
     assert client.get("/sample/anything.pdf").status_code == 404
@@ -148,8 +150,30 @@ def test_api_errors(client):
 
 
 def test_session_cookie_has_its_own_name(client):
-    resp = client.post("/camera/capture", data={"source": "ip", "ip_url": "http://8.8.8.8:8080"})
+    resp = client.post("/invoices/move", data={"company": "x"})  # nothing selected: a message in the session
     assert "invoice_parser_session=" in resp.headers.get("Set-Cookie", "")
+
+
+def test_upload_page_has_one_uploader(client):
+    html = client.get("/upload").data.decode("utf-8")
+    assert 'id="uploader"' in html and 'id="drop-zone"' in html and 'id="upload-company"' in html
+    assert 'capture="environment"' in html and "webkitdirectory" in html and "Ctrl" in html
+    assert "Recent uploads" in html and "DroidCam" not in html and "/camera/phone" not in html
+    old = client.get("/camera")  # old links and bookmarks open Add invoices
+    assert old.status_code == 302 and old.headers["Location"].endswith("/upload")
+
+
+def test_the_uploader_gets_json_and_keeps_the_message(client):
+    data = _to_pdf(_colon_layout) + b"%xhr"
+    first = client.post("/upload", data={"files": (io.BytesIO(data), "xhr.pdf"), "company": ""},
+                        content_type="multipart/form-data", headers={"X-Upload": "1"})
+    assert first.status_code == 200 and first.get_json()["next"].startswith("/invoices/")
+    again = client.post("/upload", data={"files": (io.BytesIO(data), "xhr.pdf")},
+                        content_type="multipart/form-data", headers={"X-Upload": "1"})
+    assert again.get_json()["next"] == first.get_json()["next"]
+    assert "processed before" in client.get(again.get_json()["next"]).data.decode("utf-8")  # message kept
+    empty = client.post("/upload", data={}, content_type="multipart/form-data", headers={"X-Upload": "1"})
+    assert empty.get_json()["next"] == "/upload"
 
 
 def test_port_guard_detects_busy_port():
@@ -199,8 +223,8 @@ def test_dashboard(client):
     _upload(client, _to_pdf(_colon_layout) + b"%dash", "dash.pdf")
     page = client.get("/dashboard?period=all&currency=USD")
     html = page.data.decode("utf-8")
-    assert page.status_code == 200 and "Invoice value by year" in html and "Top vendors" in html
-    assert "Acme Traders Pvt Ltd" in html and 'class="vbar"' in html
+    assert page.status_code == 200 and "Debit and credit by year" in html and "Top suppliers" in html
+    assert "Acme Traders Pvt Ltd" in html and 'class="vbar"' in html and "Credit · sales" in html
     assert client.get("/dashboard?period=fy&currency=XYZ").status_code == 200  # unknown currency: falls back
 
 
@@ -304,3 +328,45 @@ def test_scanner_page_and_folder_import(client, tmp_path):
     assert client.post("/scanner", data={"folder": str(tmp_path), "enabled": "1"}).status_code == 302
     assert app_module.load_settings()["scan_folder_on"] is True
     client.post("/scanner", data={"folder": str(tmp_path)})  # switched off again
+
+
+def _upload_to(client, data, name, company):
+    resp = client.post("/upload", data={"files": (io.BytesIO(data), name), "company": company},
+                       content_type="multipart/form-data")
+    return int(resp.headers["Location"].rstrip("/").rsplit("/", 1)[-1])
+
+
+def test_company_folders(client):
+    """Upload into a company: its folder, dashboard, filter, move, side by hand and ZIP of its files."""
+    store = app_module.store()
+    first = _upload_to(client, _to_pdf(_colon_layout) + b"%co1", "co1.pdf", "  Kavya   Infotech ")
+    assert store.get(first)["company"] == "Kavya Infotech"
+    assert 'value="Kavya Infotech"' in client.get("/upload").data.decode("utf-8")  # offered next time
+    second = _upload_to(client, _to_pdf(_colon_layout) + b"%co2", "co2.pdf", "kavya infotech")
+    assert store.get(second)["company"] == "Kavya Infotech"  # same folder, whatever the case
+
+    html = client.get("/companies").data.decode("utf-8")
+    assert "Kavya Infotech" in html and "Files (ZIP)" in html
+    listed = client.get("/invoices?company=Kavya+Infotech").data.decode("utf-8")
+    assert f'value="{first}"' in listed and f'value="{second}"' in listed
+
+    # the sample's parties are not the company: purchase (debit) unless set by hand
+    assert "Auto: Purchase · debit" in client.get(f"/invoices/{first}").data.decode("utf-8")
+    client.post(f"/invoices/{first}/company", data={"company": "Kavya Infotech", "entry_type": "sale"})
+    assert store.get(first)["entry_type"] == "sale"
+    assert 'value="sale" selected' in client.get(f"/invoices/{first}").data.decode("utf-8")
+    assert "Kavya Infotech" in client.get("/dashboard?period=all").data.decode("utf-8")  # in the company filter
+
+    archive = client.get("/companies/files.zip?company=Kavya+Infotech")
+    names = zipfile.ZipFile(io.BytesIO(archive.data)).namelist()
+    assert archive.status_code == 200 and sorted(names) == [f"Kavya Infotech/{first:05d}-co1.pdf",
+                                                            f"Kavya Infotech/{second:05d}-co2.pdf"]
+    text = client.get("/export/invoices.csv?company=Kavya+Infotech").data.decode("utf-8-sig")
+    rows = list(csv.DictReader(io.StringIO(text)))
+    assert {r["id"]: (r["company"], r["entry_type"]) for r in rows}[str(first)] == ("Kavya Infotech", "sale")
+    assert len(rows) == 2
+
+    client.post("/invoices/move", data={"ids": [str(second)], "company": "OM TRADERS"})
+    assert store.get(second)["company"] == "OM TRADERS" and store.get(first)["company"] == "Kavya Infotech"
+    client.post("/invoices/move", data={"ids": [str(first), str(second)], "company": ""})
+    assert store.get(first)["company"] is None and store.get(first)["entry_type"] is None

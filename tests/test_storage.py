@@ -177,6 +177,9 @@ def _fill(store):
     store.set_review(ids[3], "rejected")
     store.update_fields(ids[5], {"seller_name": "Delta Pvt Ltd", "total": "2,100.00"})
     store.delete([ids[6]])
+    store.set_company([ids[0], ids[1], ids[5]], "Kavya Infotech")
+    store.set_company([ids[3]], "OM TRADERS", "sale")
+    store.add_file("again2.pdf", b"file 4", company="OM TRADERS")  # known file without a company: moved
     return ids, batch
 
 
@@ -216,9 +219,14 @@ def test_mongodb_store_answers_like_the_sqlite_store(tmp_path):
                   lambda s: s.search(review=True), lambda s: s.search(status="failed"),
                   lambda s: s.search(review_status="pending"), lambda s: s.search(review_status="approved"),
                   lambda s: s.search(batch_id=batch, limit=3, offset=2),
+                  lambda s: s.search(company="Kavya Infotech"), lambda s: s.search(company="-"),
+                  lambda s: s.export_rows(company="OM TRADERS"), lambda s: s.money_rows(),
+                  lambda s: s.money_rows(company="Kavya Infotech"), lambda s: s.company_names(),
+                  lambda s: s.company_counts(), lambda s: s.files_of("Kavya Infotech"), lambda s: s.files_of("-"),
                   lambda s: [_without_item_ids(s.get(i)) for i in ids]]
-        checks += [lambda s, p=p, c=c: s.dashboard(currency=c, period=p, today=today)
-                   for p in ("12m", "fy", "lfy", "all") for c in (None, "INR", "USD", "XYZ")]
+        checks += [lambda s, p=p, c=c, co=co: s.dashboard(currency=c, period=p, today=today, company=co)
+                   for p in ("12m", "fy", "lfy", "all") for c in (None, "INR", "USD", "XYZ")
+                   for co in (None, "Kavya Infotech", "-")]
         for n, check in enumerate(checks):
             a, b = _same(check(sqlite)), _same(check(mongo))
             if n == 2:  # vendors: rows with the same total may come in either order
@@ -315,3 +323,24 @@ def test_a_photo_made_smaller_by_the_browser_is_in_mongodb_before_it_is_read(tmp
         assert store.file_path(row).read_bytes() == data
     finally:
         _close(store)
+
+
+def test_companies_in_the_store(store):
+    a, _ = store.add_file("a.pdf", b"a", queue=False, company="Kavya Infotech")
+    b, _ = store.add_file("b.pdf", b"b", queue=False)
+    for invoice_id, total in ((a, 1180.0), (b, 590.0)):
+        store.save_result(invoice_id, _result(f"N-{invoice_id}", total, tax=round(total * 18 / 118, 2)), 5)
+    assert store.company_names() == ["Kavya Infotech"]
+    assert [r["id"] for r in store.search(company="Kavya Infotech")[1]] == [a]
+    assert [r["id"] for r in store.search(company="-")[1]] == [b]
+    assert store.add_file("again.pdf", b"b", company="OM TRADERS") == (b, False)
+    assert store.get(b)["company"] == "OM TRADERS"
+    assert store.add_file("again.pdf", b"b", company="Kavya Infotech") == (b, False)
+    assert store.get(b)["company"] == "OM TRADERS"  # a file already in a company stays there
+    assert store.set_company([a, b], "Kavya Infotech", "sale") == 2
+    assert {r["entry_type"] for r in store.money_rows()} == {"sale"}
+    counts = store.company_counts()
+    assert counts["Kavya Infotech"]["invoices"] == 2 and None not in counts
+    assert [f["id"] for f in store.files_of("Kavya Infotech")] == [a, b]
+    dash = store.dashboard(period="all", company="Kavya Infotech")
+    assert dash["summary"]["credit"] == 1770.0 and dash["summary"]["debit"] == 0.0

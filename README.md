@@ -15,7 +15,7 @@ Labels are matched by **meaning**, not by position: `Seller`, `Vendor`, `Supplie
 Works from:
 - the web UI: one file (result shown immediately), many files or a ZIP (background batch),
 - the **folder import command** for thousands of files,
-- your phone's camera (browser capture, no app needed), an Android phone as IP camera, or a webcam/DroidCam,
+- your phone's camera (browser capture, no app needed) or a picture copied on the phone or PC (paste),
 - a JSON API for other company systems.
 
 No model training is required. See [Do I need a training dataset?](#do-i-need-a-training-dataset).
@@ -30,7 +30,7 @@ to finished result, one invoice at a time:
 | **Digital PDF** (Tally or other accounting export, an emailed PDF: it has a text layer) | **under 1 s** (about 0.03 s each in bulk) |
 | **Scanned PDF** (office scanner, a phone's *scan document* PDF: no text layer) | about **4-6 s** per page (was 13 s) |
 | **Image file** PNG / JPG / JPEG / TIFF / BMP / WEBP (a scan, a screenshot) | about **4-6 s** per page (was 18 s) |
-| **Phone photo** (browser camera on the *Phone camera* tab, or a photo from the gallery) | about **3-5 s** plus the upload (a SuperStore-style page ~3 s, a dense Tally GST page ~4-5 s); sideways about 5 s; upside down about 7 s |
+| **Phone photo** (*Take photo* on the Add invoices page, or a photo from the gallery) | about **3-5 s** plus the upload (a SuperStore-style page ~3 s, a dense Tally GST page ~4-5 s); sideways about 5 s; upside down about 7 s |
 | **Bill-book form filled in by hand** (photo or scan) | about **6-9 s** |
 
 - Photos, scans and scanned PDFs are read by a small neural OCR model (PaddleOCR PP-OCRv6 tiny on ONNX
@@ -60,13 +60,13 @@ Every page has a **left sidebar** with one tab per job, so new features always g
 | Tab | What it is for |
 |---|---|
 | **Overview** | Counts (invoices, need review, approved, rejected, possible duplicates, failed), amounts per currency, this month, recent invoices |
-| **Dashboard** | Invoice value by month (taxable value + GST stacked), top 10 vendors, totals; per currency, for the last 12 months, this / last financial year (Apr-Mar) or all years. Hover a bar for the numbers; "Show as a table" lists them |
-| **Upload** | Drop one PDF / photo (result opens at once) or many files / a ZIP (background batch) |
+| **Dashboard** | Total value, debit (purchase bills), credit (sales bills), net, GST payable / credit and companies at the top; debit and credit by month, company-wise, top suppliers and customers; for all or one company, per currency, for the last 12 months, this / last financial year (Apr-Mar) or all years. Hover a bar for the numbers; "Show as a table" lists them |
+| **Companies** | One folder per company: invoices, debit, credit, the company's own GSTIN (found from its invoices), and Open / Dashboard / Excel / Files (ZIP) |
+| **Add invoices** | One place for everything: pick the company, then drop or choose PDFs, photos, a ZIP or a whole folder, take photos with the phone camera, or paste a copied picture (Ctrl+V, read straight away). The files are listed (thumbnail, size, remove) before they are sent with a progress bar; one invoice opens at once, more go to a background batch |
 | **Invoices** | Search and filter all invoices (status, review status, needs review), Excel / CSV export |
 | **Review queue** | Only the invoices a person must check: low confidence, failed checks, missing fields or a possible duplicate |
 | **Data sheet** | Spreadsheet view of all invoices and line items, sort, filter, totals per currency, Excel / CSV |
 | **Vendors** | Every seller with GSTIN, invoice count, total billed and last invoice date |
-| **Phone camera** | DroidCam / IP Webcam over Wi-Fi, or the phone browser's camera |
 
 On a narrow screen (phone) the sidebar becomes a scrollable tab bar at the top.
 
@@ -129,7 +129,7 @@ being processed at that moment is not deleted.
 | Digital PDF text | **PyMuPDF** | Reads the text layer with exact word positions (milliseconds per file) |
 | Image cleanup | **OpenCV** | Finds page edges in phone photos and flattens perspective, evens out shadows, straightens skew |
 | OCR | **RapidOCR** with PaddleOCR's **PP-OCRv6 tiny** models on **ONNX Runtime** (CPU) | Neural text detection and recognition for photos, scans and scanned PDFs, 6 MB of models shipped in `invoice_parser/models` (Apache-2.0, checked by SHA-256, nothing downloaded at run time). 3-5x faster than Tesseract with the same or better accuracy; reads tilted, shadowed photos cleanly |
-| Handwriting OCR | PaddleOCR's **PP-OCRv6 small** recogniser (21 MB, same folder) | Only on pages that read poorly (forms filled in by hand), only for their doubtful lines |
+| Handwriting OCR | PaddleOCR's **PP-OCRv6 small** recogniser, 8-bit (14 MB, same folder; 27% faster than the 21 MB original, as accurate) | Only on pages that read poorly (forms filled in by hand), only for their doubtful lines |
 | OCR fallback | **Tesseract 5** via `pytesseract` | Used only when the neural OCR is switched off or fails on a page |
 | Label matching | Synonyms + **rapidfuzz** + **sentence-transformers** `all-MiniLM-L6-v2` | "Vendor", "Seller", "Supplier", "Billed by" get the same meaning; unknown wording still works. Decisions are cached on disk |
 | Field parsing | Regular expressions, **python-dateutil**, custom amount parser | `1,234.50`, `1.234,50`, `1,23,456.00`, `05/03/2024`, `3 Mar 2024`, GSTIN / VAT IDs, e-mail, phone |
@@ -206,6 +206,12 @@ with lexical matching; the result page shows which matcher was used.
 
 ## Handling hundreds or thousands of invoices
 
+**Large amounts of saved data:** the dashboard, the Companies page and the automatic company folders compare
+party names and GSTINs once and remember the answer (the same few parties come back on thousands of
+invoices). Measured with 50,000 made-up invoices: dashboard 9-12 s → about 1-1.5 s, Companies page 11 s →
+0.4 s. Invoices uploaded without a company read the saved invoices once a minute to find their company,
+instead of once for every invoice of the batch.
+
 **From the browser:** choose many files at once, or upload a ZIP. They are saved and queued, and the batch page
 shows live progress (it refreshes every 3 seconds). You can close the page; processing continues in the background.
 
@@ -242,8 +248,8 @@ What was made faster:
   PaddleOCR's PP-OCRv6 *tiny* text detector and recogniser (6 MB, ONNX Runtime on the CPU, via RapidOCR). Text
   lines are found on a 1280 px copy of the page and read from a 2000 px copy. No light flattening, deskewing or
   line removal is needed: tilted rows are levelled from the slope of the nearby text lines (a bent page tilts
-  differently at the top and bottom). A sideways page is turned and a quick check of its 8 widest lines decides
-  which way up it is. Accuracy went up: real Tally photos 90 of 90 fields, SuperStore photos 132 of 132.
+  differently at the top and bottom). A sideways page is turned and a quick check of its widest lines decides
+  which way up it is (4 lines, or 8 when the first 4 read about as well both ways round). Accuracy went up: real Tally photos 90 of 90 fields, SuperStore photos 132 of 132.
 - **Phone photos, second step: 35% less CPU per photo, 3-4x less waiting on the busy PC** (old and new reader
   run in turn on the same photos: 16-18 s → about 4 s each, CPU 6.3 s → 4.1 s, same fields right):
   - Text lines are read in batches of lines of about the same width. The library padded every line to at least
@@ -251,7 +257,8 @@ What was made faster:
   - ONNX Runtime's idle threads sleep instead of spinning; spinning threads fought the other program for the
     CPU.
   - The text lines are found once: the which-way-up check of a sideways page and the second reading of an upside
-    down page reuse them, turned with the page. The check reads its 16 line pieces in one model call.
+    down page reuse them, turned with the page. The check reads 4 lines both ways round in one model call,
+    and 4 more only when it is close (about 0.4 s less on a photo taken sideways).
 - Tried and not used for photos: finding lines on a 960 px copy (missed the Tally subtotal on 5 of 9 photos), an
   int8 version of the model (no faster on this CPU, worse text), 4 threads (slower than 2 here).
 - The embedding model used to load at every start (72 s here). It now loads only when a never-seen label appears,
@@ -327,39 +334,13 @@ New-NetFirewallRule -DisplayName "Invoice Parser (port 5077, LAN only)" -Directi
 
 ## Using a phone
 
-- **Phone browser photo (best accuracy):** open `http://<PC-IP>:5077/camera` on the phone and tap *Take photo*.
-  This uses the full camera resolution. It needs the network link above (firewall allowed).
-- **DroidCam or IP Webcam over Wi-Fi (one click, no PC software):** open **DroidCam** on the phone (port 4747),
-  or **IP Webcam** and press *Start server* (port 8080). On the PC's `/camera` page, enter the phone's Wi-Fi IP once
-  (it is remembered) and press **Connect**. The live picture opens in a large view (with a *Full screen* button;
-  `Esc` returns to the small view); press **Capture and extract**.
-  - DroidCam "busy" (another viewer still connected) is handled with DroidCam's documented `force` option
-    (`/video/force/1280x720`), and a scrambled HD picture is retried at DroidCam's standard 640×480.
-  - **Find phones** looks for DroidCam / IP Webcam on this PC's local network (ports 4747 and 8080), so any phone
-    can be connected without typing its IP.
-  - The PC connects *to* the phone, so the Windows firewall setting above is not needed for this option.
-  - DroidCam allows one viewer at a time. The app keeps a single connection and shares it between the preview
-    and the capture; close the DroidCam Windows client or other viewers first. After 60 seconds without a viewer
-    the phone is released.
-  - On capture the phone is asked to autofocus and the sharpest of the latest frames is used. With IP Webcam the
-    app takes a real full-resolution photo instead of a video frame (better for reading small text).
-  - **Tested with a real phone (DroidCam on 192.168.1.5):** the connection worked (1280×720 video), but DroidCam sent
-    a scrambled picture (green scan lines with "using droidcam.app") to this direct connection. That looks like a
-    restriction of the free app on its browser / IP-camera feed. The app detects this, refuses to save the garbage
-    picture and explains the options. **Use the free IP Webcam app** for this button, the DroidCam Windows client
-    with "Webcam on this PC", or a phone browser photo.
-  - "DroidCam is busy" means another viewer (DroidCam Windows client, OBS, a browser tab) is connected. Close it or
-    restart DroidCam on the phone. The app retries a busy phone automatically twice.
-  - Video frames are often smaller than photos (DroidCam's free video is commonly 640×480), so let the invoice fill
-    the picture. The page shows the actual video size after connecting.
-  - Only local-network addresses are accepted.
-- Phone and PC must be on the **same network** (Wi-Fi and the PC's wired LAN on the same router is fine).
-- **DroidCam with its Windows client (recommended for DroidCam, no webcam needed):** the free DroidCam client
-  on the PC receives the phone's normal picture (no green lines, no "busy" conflicts) and offers it as the
-  "DroidCam Video" camera. Connect the client to the phone in its own window, then press **Connect PC camera**
-  (card 3), or simply **Connect** in card 2: when the DroidCam client is running, Connect uses its camera
-  automatically instead of connecting to the phone directly. Card 3 also works with any webcam
-  (camera "Auto" picks the first one that gives a picture), with the same live large view.
+- **Phone photo (best accuracy):** open `http://<PC-IP>:5077/upload` (or the Render link) on the phone, tap
+  *Take photo* (once per bill; every photo is listed), then *Upload and extract*. This uses the full camera
+  resolution, needs no app, and the photos are made smaller on the phone before they are sent.
+- **Copied picture:** copy a bill's picture (WhatsApp, Gallery, a screenshot) and paste it on the Add invoices
+  page (Ctrl+V on a PC, *Paste picture* on HTTPS / localhost); it is read straight away.
+- Phone and PC must be on the **same network** for the PC's link (Wi-Fi and the PC's wired LAN on the same
+  router is fine); the Render link works from anywhere.
 
 Photos are flattened (page edges found, perspective corrected) and shadows are evened out before OCR.
 A page photographed **sideways or upside down** is
@@ -520,8 +501,8 @@ tested Windows install (checked by hash), and the web app. Render (or any Docker
 
 Differences on the server: the sentence-transformers model is not installed (`USE_EMBEDDINGS=0`; it needs over
 1 GB of RAM). Labels are then matched with the synonym list and rapidfuzz; on every test set above the results
-were the same (synthetic 672/672, katanaml 282/284). Connecting to a phone by IP (DroidCam / IP Webcam) only
-works on the local network; on the server use the browser camera on the *Phone camera* tab (works over HTTPS).
+were the same (synthetic 672/672, katanaml 282/284). On the server the phone camera works through the browser
+(*Take photo* on the Add invoices page, over HTTPS).
 
 Run the same image on your own PC or server:
 
@@ -579,13 +560,14 @@ invoice_parser/
   preprocess.py             page-edge flattening, light flattening, deskew
   ocr.py                    Tesseract wrapper (word boxes + confidence)
   fast_ocr.py               phone-photo OCR: PP-OCRv6 tiny models on ONNX Runtime (RapidOCR)
-  models/                   PP-OCRv6 tiny detector + recogniser (6 MB), PP-OCRv6 small recogniser (21 MB, handwriting)
+  models/                   PP-OCRv6 tiny detector + recogniser (6 MB), PP-OCRv6 small recogniser (14 MB, 8-bit, handwriting)
   layout.py                 words -> lines -> cells
   matcher.py                label -> field: exact, fuzzy, embedding (+ label cache)
   schema.py                 canonical fields, synonyms, guard words
   extract.py                fields, party blocks, line items, cross-checks, GST checks
   normalize.py              amounts, amount in words, dates, GSTIN check digit + OCR repair, currency
-  camera.py                 phone (IP Webcam) snapshot and webcam capture
+  companies.py              company folders, debit / credit side, dashboard figures
+  settings.py               settings changed in the app (scanner folder)
 templates/, static/         Plain HTML, CSS and JS pages
 scripts/import_folder.py          bulk import of a folder (thousands of files)
 scripts/move_to_mongodb.py        copy a PC's SQLite invoices into MongoDB
@@ -638,6 +620,8 @@ the circled quantity '①' as 1). Then:
 | `Add : CGST @ ...%` | A tax line |
 | `Name :`, `M/s.`, `No.`, `Party GST No.` | Buyer, buyer, invoice number, buyer's GSTIN (`No.` and `Name` only as labels of their own, never the end of `A/c No.` or `Bank Name`) |
 | Value written right of and below its label, date in boxes `11 \| 09 \| 2026` | Read |
+| A written date read badly: `Date:1R 8 25.`, box lines read as `1` (`10 1 7 1 25`), `11` read as `77` | Read again as a date (day, month 1-12, year): the most likely reading that is a date, 12/8/25; its confidence is that of its figures |
+| A faint `Date:` box the line finder dropped on a tilted photo | Looked for again at a lower threshold |
 | Amount in words over two lines, between the tax rows on the right | Read as one amount and checked against the total |
 | GSTIN written with an `x` or a round letter read as `0` (`06BKxPT4822032Y`) | Repaired with the GSTIN check digit: 06BKXPT4822Q3ZY |
 | Words written without a space (`SURESHMITTAL`) | Split where the gap between letters is wide |
@@ -645,7 +629,7 @@ the circled quantity '①' as 1). Then:
 | The form's printed border on a scan | Not taken for the page edge, so the header (seller, GSTIN) is kept |
 
 Measured on look-alike bill-book forms (dummy data, three handwriting styles, each as a phone photo and as a
-scan): 90 of 100 fields, about 6-7 s per page; the rest were letters the models misread (a written '1' read
+scan): 94 of 100 fields (every date right), about 4-7 s per page; the rest were letters the models misread (a written '1' read
 as '7'). Handwriting varies far more than print: check handwritten invoices in the review queue before
 approving them.
 

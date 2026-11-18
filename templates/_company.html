@@ -1,0 +1,6 @@
+{# The company box of the upload forms, the invoice page and the invoices list. #}
+{% macro company_input(value='', id='company', form=none, placeholder='Auto: the company the invoice names') -%}
+<input type="text" name="company" id="{{ id }}" value="{{ value or '' }}" list="{{ id }}-list" maxlength="80"
+       autocomplete="off" placeholder="{{ placeholder }}"{% if form %} form="{{ form }}"{% endif %}>
+<datalist id="{{ id }}-list">{% for c in company_names() %}<option value="{{ c }}">{% endfor %}</datalist>
+{%- endmacro %}

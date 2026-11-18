@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "_company.html" import company_input with context %}
 
 {% macro badge(conf) -%}
 <span class="badge {% if conf >= 0.8 %}good{% elif conf >= 0.5 %}mid{% else %}low{% endif %}">{{ (conf * 100) | round | int }}%</span>
@@ -59,6 +60,20 @@
     <p class="small">Saved as invoice #{{ invoice.id }} ·
       {% if invoice.needs_review %}<span class="badge low">needs review</span>{% else %}<span class="badge good">checks passed</span>{% endif %}
       · processed in {{ invoice.processing_ms }} ms</p>
+    <form class="company-form" method="post" action="{{ url_for('set_invoice_company', invoice_id=invoice.id) }}">
+      <label>Company (folder)
+        {{ company_input(invoice.company, id='invoice-company', placeholder='No company') }}
+      </label>
+      <label>Counts as
+        <select name="entry_type">
+          <option value="">Auto: {{ 'Sale · credit' if invoice.side == 'sale' else 'Purchase · debit' }}</option>
+          <option value="purchase" {% if invoice.entry_type == 'purchase' %}selected{% endif %}>Purchase · debit (money paid)</option>
+          <option value="sale" {% if invoice.entry_type == 'sale' %}selected{% endif %}>Sale · credit (money received)</option>
+        </select>
+      </label>
+      <button class="btn secondary" type="submit">Save</button>
+      {% if invoice.company %}<a class="small" href="{{ url_for('invoices', company=invoice.company) }}">Open folder</a>{% endif %}
+    </form>
   {% endif %}
 
   <div class="actions">
@@ -74,7 +89,7 @@
         <button class="btn danger" type="submit">Delete</button>
       </form>
     {% endif %}
-    <a class="btn secondary" href="{{ url_for('upload_page') }}">Upload more</a>
+    <a class="btn secondary" href="{{ url_for('upload_page') }}">Add more invoices</a>
   </div>
   <script type="application/json" id="result-json">{{ result_json|safe }}</script>
 </section>
