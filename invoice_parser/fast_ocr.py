@@ -54,9 +54,16 @@ REREAD_MAX_RATIO = 12
 HAND_TRUST = 0.6  # the larger model's reading wins from this confidence on
 HAND_BATCH = 4  # the larger model's working memory grows with the batch (512 MB servers: 8 used 80 MB more)
 THREADS = int(os.environ.get("PHOTO_OCR_THREADS", "0"))  # 0 = ONNX Runtime's default (all cores)
+# Batches of text lines read at the same time (1 = one after another). A model call splits every layer
+# over the cores and waits for the slowest part, so the cores often wait for each other, most of all on
+# a busy CPU. Handwritten bills on the dev PC (2 cores / 4 threads, another program using about 1.6):
+# 19.9 s one batch at a time, 17.6 s two, 14.3 s four (with this program given priority: 6.3, 5.9 and
+# 5.4 s), the same text and fields, the same peak memory (about 340 MB).
+PARALLEL = max(1, int(os.environ.get("PHOTO_OCR_PARALLEL", "0")) or min(4, os.cpu_count() or 1))
 
 _engine = None
 _hand = None
+_pool = None
 _engine_lock = threading.Lock()
 _run_lock = threading.Lock()  # one photo at a time: a single read already uses every core
 
@@ -253,26 +260,43 @@ def _reads_better_turned(engine, img, boxes):
     return turned > as_is
 
 
+def _batch_pool():
+    """The threads that read batches of text lines at the same time (PARALLEL)."""
+    global _pool
+    with _engine_lock:
+        if _pool is None:
+            from concurrent.futures import ThreadPoolExecutor
+
+            _pool = ThreadPoolExecutor(max_workers=PARALLEL, thread_name_prefix="photo-ocr")
+        return _pool
+
+
 def _recognize(rec, crops, word_boxes=False, batch_size=BATCH):
     """(text, confidence, character positions or None) for each cropped text line. Lines are sorted
-    by width and read in batches of about equally wide lines, so little of the work is padding."""
+    by width and read in batches of about equally wide lines, so little of the work is padding.
+    PARALLEL batches are read at the same time; each batch's reading is the same either way."""
     ratios = [c.shape[1] / c.shape[0] for c in crops]
     order = np.argsort(ratios, kind="stable")
-    out = [None] * len(crops)
-    start = 0
+    batches, start = [], 0
     while start < len(order):
         end = start + 1
         limit = GROUP_SPREAD * max(ratios[order[start]], LINE_MIN_WIDTH)
         while end < len(order) and end - start < batch_size and ratios[order[end]] <= limit:
             end += 1
-        batch = order[start:end]
-        widest = max(LINE_MIN_WIDTH, ratios[order[end - 1]])
+        batches.append(order[start:end])
+        start = end
+
+    def read(batch):
+        widest = max(LINE_MIN_WIDTH, ratios[batch[-1]])
         pixels = np.stack([rec.resize_norm_img(crops[k], widest) for k in batch]).astype(np.float32)
-        lines, positions = rec.postprocess_op(rec.session(pixels), word_boxes,
-                                              wh_ratio_list=[ratios[k] for k in batch], max_wh_ratio=widest)
+        return rec.postprocess_op(rec.session(pixels), word_boxes,
+                                  wh_ratio_list=[ratios[k] for k in batch], max_wh_ratio=widest)
+
+    done = _batch_pool().map(read, batches) if PARALLEL > 1 and len(batches) > 1 else map(read, batches)
+    out = [None] * len(crops)
+    for batch, (lines, positions) in zip(batches, done):
         for m, k in enumerate(batch):
             out[k] = (lines[m][0], float(lines[m][1]), positions[m] if word_boxes else None)
-        start = end
     return out
 
 

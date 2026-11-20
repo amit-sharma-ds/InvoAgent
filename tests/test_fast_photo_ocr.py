@@ -121,6 +121,26 @@ def test_the_models_give_their_working_memory_back_after_each_run():
     assert session._run_options.get_run_config_entry("memory.enable_memory_arena_shrinkage") == "cpu:0"
 
 
+@needs_fast_ocr
+def test_batches_read_at_the_same_time_give_the_same_text(monkeypatch):
+    import cv2
+
+    lines = []
+    for k, text in enumerate(["Invoice No. 7", "Kavya Infotech", "GSTIN 06BKXPT4822Q3ZY", "Total 2,95,000.00",
+                              "23/09/2026", "CGST @ 9%", "Plot 12, Sector 5, Gurugram", "Qty 1"] * 4):
+        img = np.full((48, 40 + 22 * len(text) + 7 * (k % 5), 3), 255, np.uint8)
+        cv2.putText(img, text, (8, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 2)
+        lines.append(img)
+    rec = fast_ocr._get_engine().text_rec
+    monkeypatch.setattr(fast_ocr, "PARALLEL", 1)
+    one_by_one = fast_ocr._recognize(rec, lines, batch_size=3)
+    monkeypatch.setattr(fast_ocr, "PARALLEL", 4)
+    monkeypatch.setattr(fast_ocr, "_pool", None)
+    together = fast_ocr._recognize(rec, lines, batch_size=3)
+    assert [(t, round(s, 6)) for t, s, _ in together] == [(t, round(s, 6)) for t, s, _ in one_by_one]
+    assert together[0][0].replace(" ", "") == "InvoiceNo.7"
+
+
 def test_pictures_from_the_apps_own_camera_page_count_as_photos():
     assert ingest._from_app_camera("phone-20261112-101010.jpg")
     assert ingest._from_app_camera("phone-camera-20261112-101010.jpg")

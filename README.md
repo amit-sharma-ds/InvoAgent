@@ -542,6 +542,7 @@ Set these as environment variables (PowerShell: `$env:NAME="value"`):
 | `FAST_PHOTO_OCR` | `1` | `0` reads photos and scans with Tesseract instead of the fast neural OCR |
 | `HANDWRITING_OCR` | `1` | `0` turns off the second, larger model for pages written by hand |
 | `PHOTO_OCR_THREADS` | all cores (`1` in the Docker image) | CPU threads for the phone-photo OCR |
+| `PHOTO_OCR_PARALLEL` | `4` (fewer on smaller CPUs) | Batches of text lines the photo OCR reads at the same time (`1` = one after another) |
 | `MAX_UPLOAD_MB` | `300` | Browser upload limit per request (use the folder import for more) |
 | `FLASK_SECRET_KEY` | random, in `data/secret_key` | Session signing key (set it only to share one key between servers) |
 
