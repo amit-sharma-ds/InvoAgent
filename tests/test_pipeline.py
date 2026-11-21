@@ -366,6 +366,42 @@ def test_a_gst_type_mismatch_names_both_states(parser):
         "both in Haryana (06), so CGST + SGST is expected, but the invoice shows IGST.")
 
 
+def _form_with_spaced_name(c):
+    """A joinery bill form filled in by hand: the words of the customer's name stand far apart, so each
+    is a cell of its own ('To: | Mr | K. | Verma'), and the form's 'Contact:' label follows on the right."""
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(40, 790, "OAKWOOD JOINERY LTD")
+    c.drawString(470, 790, "INVOICE")
+    c.setFont("Helvetica", 10)
+    c.drawString(470, 772, "No. 01234")
+    c.drawString(40, 772, "Unit 3, Mill Lane, Dover")
+    c.drawString(400, 740, "Date: 02/05/26")
+    c.drawString(40, 700, "To:")
+    for x, word in ((80, "Mr"), (115, "K."), (145, "Verma")):
+        c.drawString(x, 700, word)
+    c.drawString(330, 700, "Contact:")
+    c.drawString(80, 686, "4 Oak Street")
+    c.drawString(40, 640, "DESCRIPTION")
+    c.drawRightString(560, 640, "AMOUNT")
+    c.drawString(40, 624, "Fit 3 kitchen cupboards")
+    c.drawRightString(560, 624, "180.00")
+    c.drawString(40, 610, "Skirting boards")
+    c.drawRightString(560, 610, "95.00")
+    c.drawString(400, 580, "SUBTOTAL")
+    c.drawRightString(560, 580, "275.00")
+    c.drawString(400, 566, "VAT 20%")
+    c.drawRightString(560, 566, "55.00")
+    c.drawString(400, 552, "TOTAL")
+    c.drawRightString(560, 552, "330.00")
+
+
+def test_a_name_written_with_wide_spaces_is_kept_whole(parser):
+    result = parser.parse_bytes("spaced-name.pdf", _to_pdf(_form_with_spaced_name))
+    buyer = result["fields"]["buyer"]["value"]
+    assert buyer["name"] == "Mr K. Verma"  # not just 'Mr'
+    assert buyer["address"] == "4 Oak Street"
+
+
 def test_a_real_mismatch_is_not_hidden(parser):
     """When nothing proves the right value (two digits differ), the amounts are left as read and the
     check fails, so a person looks at it."""

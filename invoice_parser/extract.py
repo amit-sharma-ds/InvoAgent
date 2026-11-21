@@ -597,7 +597,7 @@ def _party(cands, field, lines, label_cells, label_lines):
 
     pool = sorted((c for c in cands if c.field == field), key=rank)
     for c in pool:
-        block = [c.value] if c.value else []
+        block = [_value_with_following_cells(lines[c.line_idx], c, label_cells)] if c.value else []
         after_gap = False
         column = _party_column(lines[c.line_idx], c, label_cells)
         i = c.line_idx + 1
@@ -650,6 +650,33 @@ def _party(cands, field, lines, label_cells, label_lines):
                 "page": c.page + 1,
             }
     return None
+
+
+def _value_with_following_cells(line, c, label_cells, max_gap=0.06):
+    """A party's name beside its label may be cut into several cells: handwriting leaves wide spaces
+    between words ('To: | Mr | K. | Verma' gave the buyer 'Mr'). The cells that follow the value
+    closely (the same gap as in _cells_in_column) and are not labels belong to it; a wider gap or the
+    next label ('Contact:') ends it."""
+    boxes = line.cell_boxes
+    k = c.cell_idx
+    value = c.value.strip()
+    if not boxes or k >= len(boxes):
+        return c.value
+    # the cell the value ends in: the one after the label ('To: | Mrs') or the label's own ('To: Mrs')
+    if k + 1 < len(boxes) and boxes[k + 1].text.strip() == value:
+        k += 1
+    elif not boxes[k].text.strip().endswith(value):
+        return c.value
+    parts = [value]
+    while k + 1 < len(boxes):
+        nxt = boxes[k + 1]
+        text = nxt.text.strip()
+        if (not text or (line.index, k + 1) in label_cells or nxt.x0 - boxes[k].x1 >= max_gap
+                or _LABEL_CELL_RE.match(text) or text.endswith(":")):
+            break
+        parts.append(text)
+        k += 1
+    return " ".join(parts)
 
 
 def _gstin_below(lines, c, column, max_lines=6):
