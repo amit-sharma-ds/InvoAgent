@@ -136,9 +136,17 @@ def _photo_decode_flag(data: bytes):
     return cv2.IMREAD_COLOR
 
 
+# Pages whose text lines are kept for a second look at the item and party lines (pipeline.py): the
+# first few, so a long scanned PDF does not hold every page's line images in memory
+KEEP_LINES_PAGES = 3
+
+
 def _read_camera_photo(arr, index):
     """A phone photo through the fast reader (an upside-down page is turned inside read_photo)."""
     img, turned = prepare_camera_photo(arr)
+    if index < KEEP_LINES_PAGES:
+        words, conf, lines = fast_ocr.read_photo(img, index, check_upside_down=turned, keep_lines=True)
+        return Page(index, words, "ocr", conf, lines)
     words, conf = fast_ocr.read_photo(img, index, check_upside_down=turned)
     return Page(index, words, "ocr", conf)
 

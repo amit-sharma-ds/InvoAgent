@@ -1,5 +1,5 @@
 """Shared data classes for words, lines and pages."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -25,3 +25,6 @@ class Page:
     words: list
     method: str  # "digital" (PDF text layer) or "ocr" (scan / photo)
     ocr_conf: float  # mean OCR confidence of the page (1.0 for digital)
+    # the fast reader's text lines (fast_ocr.PageLines), kept for a second look at the lines the
+    # extraction used; dropped once the fields are found
+    ocr_lines: object = field(default=None, repr=False, compare=False)

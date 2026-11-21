@@ -59,7 +59,8 @@ def test_scans_are_read_by_the_fast_reader_too(monkeypatch):
         raise AssertionError("a scan should not need Tesseract")
 
     monkeypatch.setattr(fast_ocr, "available", lambda: True)
-    monkeypatch.setattr(fast_ocr, "read_photo", lambda img, page, check_upside_down=False: ([], 0.8))
+    monkeypatch.setattr(fast_ocr, "read_photo", lambda img, page, check_upside_down=False, keep_lines=False:
+                        ([], 0.8, None) if keep_lines else ([], 0.8))
     monkeypatch.setattr(ingest, "ocr_image", no_tesseract)
     png = io.BytesIO()
     Image.new("RGB", (400, 300), "white").save(png, "PNG")
@@ -139,6 +140,49 @@ def test_batches_read_at_the_same_time_give_the_same_text(monkeypatch):
     together = fast_ocr._recognize(rec, lines, batch_size=3)
     assert [(t, round(s, 6)) for t, s, _ in together] == [(t, round(s, 6)) for t, s, _ in one_by_one]
     assert together[0][0].replace(" ", "") == "InvoiceNo.7"
+
+
+def _line_image(text, width=None):
+    import cv2
+
+    img = np.full((48, width or 30 + 20 * len(text), 3), 255, np.uint8)
+    cv2.putText(img, text, (8, 34), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 2)
+    return img
+
+
+def _page_lines(readings):
+    """fast_ocr.PageLines of a page whose lines (rendered text) the small model read as `readings`."""
+    crops = [_line_image(truth) for truth, _, _ in readings]
+    boxes = np.array([[[10, 60 * k], [10 + c.shape[1], 60 * k], [10 + c.shape[1], 60 * k + 48], [10, 60 * k + 48]]
+                      for k, c in enumerate(crops)], dtype=np.float32)
+    return fast_ocr.PageLines(0, (60 * len(crops) + 40, 1000), boxes, crops,
+                              [(read, score, None) for _, read, score in readings], set())
+
+
+@needs_fast_ocr
+def test_a_second_look_keeps_the_surer_reading_of_a_line():
+    lines = _page_lines([("Skirting boards", "Skirtng boards", 0.80),   # misread, not sure
+                         ("Fit 3 kitchen cupboards", "Fit 3 kitchen cupboards", 0.99)])  # sure: left alone
+    words = fast_ocr.reread_lines(lines, [0, 1])
+    assert lines.read[0][0] == "Skirting boards" and lines.read[0][1] > 0.8
+    assert lines.read[1] == ("Fit 3 kitchen cupboards", 0.99, None) and 1 not in lines.hand_read
+    assert "Skirting" in [w.text for w in words]
+    assert fast_ocr.reread_lines(lines, [0]) is None  # a line is read again only once
+
+
+def test_the_second_look_reads_the_item_and_party_lines(monkeypatch):
+    from invoice_parser import pipeline
+    from invoice_parser.models import Page
+
+    lines = fast_ocr.PageLines(0, (800, 600), None, [None] * 5, [
+        ("OAKWOOD JOINERY LTD", 1.0, None), ("To: Mr K. Verma", 0.9, None), ("Skirting boards", 0.9, None),
+        ("95.00", 0.9, None), ("Thank you", 0.9, None)], set())
+    asked = []
+    monkeypatch.setattr(fast_ocr, "reread_lines", lambda page_lines, indexes: asked.append(indexes))
+    result = {"line_items": [{"description": "Skirting boards"}],
+              "fields": {"buyer": {"value": {"name": "Mr K. Verma"}}, "seller": None}}
+    assert pipeline._second_look([Page(0, [], "ocr", 0.9, lines)], result) is False
+    assert asked == [[1, 2]]
 
 
 def test_pictures_from_the_apps_own_camera_page_count_as_photos():

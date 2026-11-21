@@ -154,9 +154,11 @@ def warm_up():
                 _recognize(hand, [img], batch_size=HAND_BATCH)
 
 
-def read_photo(img, page_index: int, check_upside_down: bool = False):
+def read_photo(img, page_index: int, check_upside_down: bool = False, keep_lines: bool = False):
     """OCR a phone photo of a page (BGR or gray, already cut out of the photo; text running left to
-    right, possibly upside down). Returns (words, mean_confidence) like ocr.ocr_image.
+    right, possibly upside down). Returns (words, mean_confidence) like ocr.ocr_image, and with
+    keep_lines the page's text lines as a third value (PageLines), for a second look at the lines the
+    extraction used (reread_lines).
 
     check_upside_down: the page was given a quarter turn (photographed sideways), so it is upside
     down half the time; its widest lines are read both ways round to decide before the full reading.
@@ -172,7 +174,7 @@ def read_photo(img, page_index: int, check_upside_down: bool = False):
         engine = _get_engine()
         boxes, text_map = _find_lines(engine, img)
         if boxes is None:
-            return [], 0.0
+            return ([], 0.0, None) if keep_lines else ([], 0.0)
         if check_upside_down and _reads_better_turned(engine, img, boxes):
             img, boxes = _turn_round(engine, img, boxes)
             text_map = text_map[..., ::-1, ::-1]
@@ -185,14 +187,69 @@ def read_photo(img, page_index: int, check_upside_down: bool = False):
             if t_sure > sure:
                 img, boxes, crops, read, conf, sure = t_img, t_boxes, t_crops, t_read, t_conf, t_sure
                 text_map = text_map[..., ::-1, ::-1]
+        hand_read, own = set(), len(read)  # lines the handwriting model has read already; the page's own lines
         if sure < HANDWRITING_BELOW:  # still poor: details written by hand
+            hand_read = set(_doubtful(crops, read))
             read = [_with_gaps(text, score, info) for text, score, info in _reread(crops, read)]
             boxes, crops, read = _fill_gaps(engine, img, boxes, crops, read)
             boxes, crops, read = _more_date_boxes(engine, img, boxes, crops, read, text_map)
         boxes, crops, read, dated = _reread_dates(engine, img, boxes, crops, read)
         if sure < HANDWRITING_BELOW or dated:
             conf, _ = _confidence(engine, read)
-        return _words(engine, img, boxes, crops, read, page_index), conf
+        words = _words(engine, img, boxes, crops, read, page_index)
+    if not keep_lines:
+        return words, conf
+    # gap and date readings (added after the page's own lines, or without character positions) are
+    # the larger model's already
+    hand_read |= {k for k, (_, _, info) in enumerate(read) if info is None or k >= own}
+    return words, conf, PageLines(page_index, img.shape[:2], boxes, list(crops), list(read), hand_read, sure)
+
+
+class PageLines:
+    """A read page's text lines, kept for a second look (reread_lines) until its fields are found."""
+
+    def __init__(self, page_index, shape, boxes, crops, read, hand_read, sure=0.0):
+        self.page_index, self.shape, self.boxes = page_index, shape, boxes
+        self.crops, self.read, self.hand_read = crops, read, hand_read
+        self.sure = sure  # share of its lines the small model read with 0.9+ confidence
+
+
+SECOND_LOOK_BELOW = 0.98  # lines the extraction used are read again by the larger model below this ...
+SECOND_LOOK_LINES = 16    # ... at most this many per page ...
+# ... on pages with some doubtful lines. Printed photos read 99-100% of their lines at 0.9+ (no second
+# look, no extra time); a printed form filled in by hand read 83-97% (photo variants of one such bill).
+SECOND_LOOK_PAGE_BELOW = 0.98
+
+
+def reread_lines(lines, indexes):
+    """A second look at chosen lines of a read page (the item and party lines the extraction used) with
+    the handwriting model. A page that reads well as a whole (a printed form with a few words written
+    in) is not read again line by line, and the small model can misread those words: a handwritten
+    'fitting' came back as 'fiing', 'internal' as 'intermal' (the larger model read both right). The
+    larger model's reading is kept only when it is surer and changes no number. Returns the page's
+    words when a line changed, otherwise None."""
+    if lines.sure >= SECOND_LOOK_PAGE_BELOW:
+        return None
+    hand = _hand_reader()
+    todo = [k for k in dict.fromkeys(indexes)
+            if 0 <= k < len(lines.read) and k not in lines.hand_read
+            and lines.read[k][1] < SECOND_LOOK_BELOW][:SECOND_LOOK_LINES]
+    if hand is None or not todo:
+        return None
+    with _run_lock:
+        again = _recognize(hand, [lines.crops[k] for k in todo], word_boxes=True, batch_size=HAND_BATCH)
+        changed = False
+        for k, new in zip(todo, again):
+            lines.hand_read.add(k)
+            old, score, _ = lines.read[k]
+            if (_clean(new[0]) and new[1] > score and not _spoils_number(old, new[0])
+                    and not _adds_digits(old, new[0])):
+                lines.read[k] = _with_gaps(*new)
+                changed = True
+        if not changed:
+            return None
+        shape_only = np.broadcast_to(np.zeros((), np.uint8), tuple(lines.shape) + (3,))  # _words needs the size
+        return _words(_get_engine(), shape_only, lines.boxes, lines.crops, lines.read, lines.page_index)
 
 
 def _hand_reader():
@@ -320,11 +377,7 @@ def _reread(crops, read):
     '3805' for '380S', '42288' for '4R88' and the circled quantity '①' for '0', often with a
     slightly lower confidence than the small model's wrong reading."""
     hand = _hand_reader()
-    # fairly sure long lines are printed sentences (address, terms): reading them again costs the most
-    # (the larger model's time grows with a line's width) and changes nothing that matters
-    doubtful = [k for k, (_, score, _) in enumerate(read)
-                if score < REREAD_LONG_BELOW or (score < REREAD_BELOW
-                                                 and crops[k].shape[1] <= REREAD_MAX_RATIO * crops[k].shape[0])]
+    doubtful = _doubtful(crops, read)
     if hand is None or not doubtful:
         return read
     again = _recognize(hand, [crops[k] for k in doubtful], word_boxes=True, batch_size=HAND_BATCH)
@@ -335,6 +388,15 @@ def _reread(crops, read):
                 and (new[1] > read[k][1] or (new[1] >= HAND_TRUST and not _adds_digits(old, new[0])))):
             read[k] = new
     return read
+
+
+def _doubtful(crops, read):
+    """The lines _reread reads again. Fairly sure long lines are printed sentences (address, terms):
+    reading them again costs the most (the larger model's time grows with a line's width) and changes
+    nothing that matters."""
+    return [k for k, (_, score, _) in enumerate(read)
+            if score < REREAD_LONG_BELOW or (score < REREAD_BELOW
+                                             and crops[k].shape[1] <= REREAD_MAX_RATIO * crops[k].shape[0])]
 
 
 def _spoils_number(old, new):

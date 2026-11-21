@@ -628,11 +628,13 @@ the circled quantity '①' as 1). Then:
 | Amount in words over two lines, between the tax rows on the right | Read as one amount and checked against the total |
 | GSTIN written with an `x` or a round letter read as `0` (`06BKxPT4822032Y`) | Repaired with the GSTIN check digit: 06BKXPT4822Q3ZY |
 | Words written without a space (`SURESHMITTAL`) | Split where the gap between letters is wide |
+| Words written with wide spaces beside a label: `To: Mr  K.  Verma` | One name, `Mr K. Verma` (not `Mr`) |
+| A mostly printed form with a few words written in (`fitting` read as `fiing`) | The item and party lines the fields came from are read again by the larger model, which wins when surer (no extra time on printed pages) |
 | A grand total in whole rupees within a rupee of subtotal + tax | Round-off, not a misread |
 | The form's printed border on a scan | Not taken for the page edge, so the header (seller, GSTIN) is kept |
 
 Measured on look-alike bill-book forms (dummy data, three handwriting styles, each as a phone photo and as a
-scan): 94 of 100 fields (every date right), about 4-7 s per page; the rest were letters the models misread (a written '1' read
+scan): 95 of 100 fields (every date right), about 4-7 s per page; the rest were letters the models misread (a written '1' read
 as '7'). Handwriting varies far more than print: check handwritten invoices in the review queue before
 approving them.
 
