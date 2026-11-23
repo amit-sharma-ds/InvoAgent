@@ -66,9 +66,9 @@
       </label>
       <label>Counts as
         <select name="entry_type">
-          <option value="">Auto: {{ 'Sale · credit' if invoice.side == 'sale' else 'Purchase · debit' }}</option>
-          <option value="purchase" {% if invoice.entry_type == 'purchase' %}selected{% endif %}>Purchase · debit (money paid)</option>
-          <option value="sale" {% if invoice.entry_type == 'sale' %}selected{% endif %}>Sale · credit (money received)</option>
+          <option value="">Auto: {{ 'Sale' if invoice.side == 'sale' else 'Purchase' }}</option>
+          <option value="purchase" {% if invoice.entry_type == 'purchase' %}selected{% endif %}>Purchase (money paid)</option>
+          <option value="sale" {% if invoice.entry_type == 'sale' %}selected{% endif %}>Sale (money received)</option>
         </select>
       </label>
       <button class="btn secondary" type="submit">Save</button>

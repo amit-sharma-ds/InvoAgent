@@ -32,7 +32,8 @@ from flask import (Flask, Response, abort, flash, jsonify, redirect, render_temp
                    send_file, session, url_for)
 
 from invoice_parser import auth, config, fast_ocr
-from invoice_parser.companies import (ENTRY_TYPES, NO_COMPANY, clean_company, company_gstins, folders,
+from invoice_parser.companies import (ENTRY_TYPES, NO_COMPANY, clean_company, company_gstins,
+                                      file_without_company, folders, own_companies_text, parse_own_companies,
                                       side_of, with_sides)
 from invoice_parser.settings import load_settings, save_settings
 from invoice_parser.exporting import build_xlsx, to_csv
@@ -330,7 +331,8 @@ def invoices():
 @app.get("/data")
 def data_sheet():
     """Spreadsheet view: every invoice (and every line item) in one table."""
-    rows, items = with_sides(store().export_rows(), store().money_rows()), store().export_line_items()
+    rows = with_sides(store().export_rows(), store().money_rows(), store().own_companies())
+    items = store().export_line_items()
     return render_template("data.html", rows=rows[:SHEET_ROW_LIMIT], items=items[:SHEET_ROW_LIMIT * 5],
                            total_rows=len(rows), total_items=len(items), columns=EXPORT_COLUMNS,
                            item_columns=ITEM_COLUMNS, money_columns=MONEY_COLUMNS | {"unit_price", "amount"},
@@ -391,14 +393,15 @@ def invoice_detail(invoice_id):
         abort(404)
     if row["status"] != "done":
         return render_template("invoice_status.html", invoice=row)
-    gstin = company_gstins(store().money_rows(company=row["company"])).get(row["company"]) if row["company"] else None
+    gstin = (company_gstins(store().money_rows(company=row["company"]), store().own_companies()).get(row["company"])
+             if row["company"] else None)
     row["side"] = side_of(row, gstin)
     return _render_result(json.loads(row["result_json"]), invoice=row)
 
 
 @app.post("/invoices/<int:invoice_id>/company")
 def set_invoice_company(invoice_id):
-    """Move one invoice to another company and / or set its side (purchase = debit, sale = credit)."""
+    """Move one invoice to another company and / or set its side (purchase or sale)."""
     if store().get(invoice_id) is None:
         abort(404)
     company = _chosen_company(request.form.get("company"))
@@ -423,7 +426,26 @@ def move_invoices():
 # --- companies (one folder each) -----------------------------------------------------------
 @app.get("/companies")
 def companies():
-    return render_template("companies.html", folders=folders(store().company_counts(), store().money_rows()))
+    own = store().own_companies()
+    return render_template("companies.html", folders=folders(store().company_counts(), store().money_rows(), own),
+                           own_text=own_companies_text(own))
+
+
+@app.post("/companies/own")
+def save_own_companies():
+    """Your companies: a bill where one of them is the seller counts as a sale, where it is the buyer as a
+    purchase. The invoices without a company that name one of them are put into its folder."""
+    folders_now = [c for c in store().company_counts() if c]
+    firms = [{**f, "name": clean_company(f["name"], folders_now)}  # the folder's spelling when it exists
+             for f in parse_own_companies(request.form.get("companies"))]
+    store().set_own_companies(firms)
+    moved = file_without_company(store()) if firms else 0
+    message = f"Your companies: {', '.join(f['name'] for f in firms) or 'none'}."
+    if moved:
+        message += (f" {moved} invoice{'s' if moved != 1 else ''} without a company moved into "
+                    f"{'their' if len(firms) > 1 else 'its'} folder.")
+    flash(message)
+    return redirect(url_for("companies"))
 
 
 def _safe_file_name(name):
@@ -588,7 +610,7 @@ def _download(data, name, mimetype):
 
 @app.get("/export/invoices.csv")
 def export_invoices_csv():
-    rows = with_sides(store().export_rows(**_filters()), store().money_rows())
+    rows = with_sides(store().export_rows(**_filters()), store().money_rows(), store().own_companies())
     return _download(to_csv(rows, EXPORT_COLUMNS), "invoices.csv", "text/csv")
 
 
@@ -600,8 +622,8 @@ def export_line_items_csv():
 @app.get("/export/invoices.xlsx")
 def export_invoices_xlsx():
     filters = _filters()
-    data = build_xlsx(with_sides(store().export_rows(**filters), store().money_rows()), EXPORT_COLUMNS,
-                      store().export_line_items(**filters), ITEM_COLUMNS)
+    rows = with_sides(store().export_rows(**filters), store().money_rows(), store().own_companies())
+    data = build_xlsx(rows, EXPORT_COLUMNS, store().export_line_items(**filters), ITEM_COLUMNS)
     return _download(data, "invoices.xlsx",
                      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 

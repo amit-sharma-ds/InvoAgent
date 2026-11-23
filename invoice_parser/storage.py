@@ -18,7 +18,7 @@ from pathlib import Path
 
 from . import config
 from . import normalize as nz
-from .companies import ENTRY_TYPES, MONEY_FIELDS, NO_COMPANY, build_dashboard
+from .companies import ENTRY_TYPES, MONEY_FIELDS, NO_COMPANY, build_dashboard, known_companies
 from .extract import REQUIRED_FIELDS, overall_confidence
 
 SCHEMA = """
@@ -96,6 +96,10 @@ CREATE TABLE IF NOT EXISTS line_items (
     amount REAL
 );
 CREATE INDEX IF NOT EXISTS idx_items_invoice ON line_items(invoice_id);
+CREATE TABLE IF NOT EXISTS app_settings (           -- settings kept with the invoices (your companies)
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL                             -- JSON
+);
 """
 
 # Columns added after the first release: added automatically to older databases.
@@ -660,7 +664,8 @@ class InvoiceStore:
 
     def dashboard(self, currency=None, period="12m", today=None, company=None):
         """Figures for the Dashboard tab (see companies.build_dashboard)."""
-        return build_dashboard(self.money_rows(), currency, period, today, company, self.company_names())
+        return build_dashboard(self.money_rows(), currency, period, today, company, self.company_names(),
+                               self.own_companies())
 
     # --- companies (folders) ------------------------------------------------------------
     def money_rows(self, company=None):
@@ -672,9 +677,21 @@ class InvoiceStore:
                 f"SELECT {', '.join(MONEY_FIELDS)} FROM invoices{where} ORDER BY id", args)]
 
     def company_names(self):
+        """Every known company: the folders that hold invoices and your own companies."""
         with self._db() as con:
-            return sorted((r[0] for r in con.execute(
-                "SELECT DISTINCT company FROM invoices WHERE company IS NOT NULL")), key=str.lower)
+            folders = [r[0] for r in con.execute("SELECT DISTINCT company FROM invoices WHERE company IS NOT NULL")]
+        return known_companies(folders, self.own_companies())
+
+    def own_companies(self):
+        """Your own companies, set on the Companies page: [{"name", "gstin"}]."""
+        with self._db() as con:
+            row = con.execute("SELECT value FROM app_settings WHERE key = 'own_companies'").fetchone()
+        return json.loads(row[0]) if row else []
+
+    def set_own_companies(self, firms):
+        with self._db() as con:
+            con.execute("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('own_companies', ?)",
+                        (json.dumps(list(firms)),))
 
     def company_counts(self):
         """{company or None: {"invoices", "needs_review", "last_added"}}, one entry per company folder."""

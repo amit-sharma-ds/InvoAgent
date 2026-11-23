@@ -4,12 +4,24 @@
   <h1>Companies</h1>
   <p class="muted small">One folder per company. An invoice goes into the folder picked in the <em>Company</em> box when it
     is uploaded (Add invoices page); left empty, into the known company whose name or GSTIN it shows.
-    Move invoices on the Invoices page (select rows, <em>Move selected</em>) or on the invoice itself.
-    Debit = purchase bills, credit = sales bills.</p>
+    Move invoices on the Invoices page (select rows, <em>Move selected</em>) or on the invoice itself.</p>
   <div class="actions">
     <a class="btn" href="{{ url_for('upload_page') }}">Add invoices to a company</a>
     <a class="btn secondary" href="{{ url_for('dashboard') }}">Company-wise dashboard</a>
   </div>
+</section>
+
+<section class="card" id="own-companies">
+  <h2>Your companies</h2>
+  <p class="muted small">The businesses whose bills these are. A bill where one of them is the <strong>seller</strong>
+    counts as a <strong>sale</strong>; where it is the <strong>buyer</strong>, as a <strong>purchase</strong>.
+    Every new invoice goes into the folder of the company it names, and saving here moves the invoices without a
+    company there too. One company per line; the GSTIN after the name is optional but surer than the name.</p>
+  <form class="own-companies-form" method="post" action="{{ url_for('save_own_companies') }}">
+    <textarea name="companies" rows="3" aria-label="Your companies, one per line"
+              placeholder="Kavya Infotech Pvt Ltd, 06BKXPT4822Q3ZY&#10;OM TRADERS">{{ own_text }}</textarea>
+    <button class="btn" type="submit">Save</button>
+  </form>
 </section>
 
 {% if folders %}
@@ -27,13 +39,13 @@
       {% if f.gstin %}<p class="muted small folder-gstin">GSTIN {{ f.gstin }}</p>{% endif %}
       {% if f.currency %}
       <dl class="folder-money">
-        <div><dt><span class="swatch debit"></span>Debit</dt><dd>{{ f.debit | amount(f.currency) }}</dd></div>
-        <div><dt><span class="swatch credit"></span>Credit</dt><dd>{{ f.credit | amount(f.currency) }}</dd></div>
+        <div><dt><span class="swatch debit"></span>Purchases</dt><dd>{{ f.debit | amount(f.currency) }}</dd></div>
+        <div><dt><span class="swatch credit"></span>Sales</dt><dd>{{ f.credit | amount(f.currency) }}</dd></div>
       </dl>
       <p class="muted small">{{ f.currency }}{% if f.other_currencies %} · also {{ f.other_currencies | join(', ') }}{% endif %}
         · last added {{ (f.last_added or '')[:10] }}</p>
       {% else %}
-      <p class="muted small">No processed amounts yet · last added {{ (f.last_added or '')[:10] }}</p>
+      <p class="muted small">No processed amounts yet{% if f.last_added %} · last added {{ f.last_added[:10] }}{% endif %}</p>
       {% endif %}
       <div class="actions">
         <a class="btn secondary" href="{{ url_for('invoices', company=key) }}">Open</a>

@@ -329,6 +329,9 @@ a.kpi:hover { border-color: #c7d2fe; }
 .company-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin: 8px 0 4px; padding: 10px 12px;
   background: var(--bg); border-radius: 10px; }
 .company-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.own-companies-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
+.own-companies-form textarea { flex: 1 1 320px; min-width: 0; max-width: 560px; padding: 8px 10px; border: 1px solid var(--border);
+  border-radius: 8px; font: inherit; color: var(--text); background: #fff; resize: vertical; }
 .bulk-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .bulk-actions input { width: 200px; }
 .dash-pair { display: grid; gap: 16px; grid-template-columns: 1fr; }

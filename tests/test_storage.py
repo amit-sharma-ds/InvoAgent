@@ -325,6 +325,36 @@ def test_a_photo_made_smaller_by_the_browser_is_in_mongodb_before_it_is_read(tmp
         _close(store)
 
 
+def test_your_companies_in_the_store(store):
+    """Your companies are kept with the invoices; saving them files the invoices without a company."""
+    from invoice_parser.companies import file_without_company
+
+    assert store.own_companies() == []
+    sold, _ = store.add_file("s.pdf", b"s", queue=False)
+    bought, _ = store.add_file("p.pdf", b"p", queue=False)
+    misread, _ = store.add_file("m.pdf", b"m", queue=False)
+    other, _ = store.add_file("o.pdf", b"o", queue=False)
+    store.save_result(sold, _result("S-1", 1180.0, seller="Kavya Infotech Pvt Ltd", gstin="06BKXPT4822Q3ZY"), 5)
+    store.save_result(bought, _result("P-1", 590.0, seller="OM TRADERS", gstin="09AGHPR3344C1ZG"), 5)
+    to_us = _result("P-2", 236.0, seller="Ganesha Softech")
+    to_us["fields"]["buyer"] = {"value": {"name": "Kavya lnfotecb", "tax_id": "06BKXPT4822Q3ZY"}}  # name misread
+    store.save_result(misread, to_us, 5)
+    store.save_result(other, _result("X-1", 100.0, seller="Ganesha Softech"), 5)
+    store.set_company([bought], None, "sale")  # a side set by hand stays when the invoice is filed
+    store.set_own_companies([{"name": "Kavya Infotech", "gstin": None}, {"name": "OM TRADERS", "gstin": None}])
+    assert store.own_companies()[0] == {"name": "Kavya Infotech", "gstin": None}
+    assert store.company_names() == ["Kavya Infotech", "OM TRADERS"]
+    # the misread bill is found by Kavya Infotech's GSTIN, learned from the bill filed by its name
+    assert file_without_company(store) == 3
+    assert [store.get(i)["company"] for i in (sold, bought, misread, other)] == [
+        "Kavya Infotech", "OM TRADERS", "Kavya Infotech", None]
+    assert store.get(bought)["entry_type"] == "sale"
+    dash = store.dashboard(period="all", company="Kavya Infotech")
+    assert (dash["summary"]["credit"], dash["summary"]["debit"]) == (1180.0, 236.0) and dash["own_companies"]
+    store.set_own_companies([])
+    assert store.own_companies() == [] and store.company_names() == ["Kavya Infotech", "OM TRADERS"]  # folders stay
+
+
 def test_companies_in_the_store(store):
     a, _ = store.add_file("a.pdf", b"a", queue=False, company="Kavya Infotech")
     b, _ = store.add_file("b.pdf", b"b", queue=False)

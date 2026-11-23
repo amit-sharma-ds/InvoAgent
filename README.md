@@ -60,8 +60,8 @@ Every page has a **left sidebar** with one tab per job, so new features always g
 | Tab | What it is for |
 |---|---|
 | **Overview** | Counts (invoices, need review, approved, rejected, possible duplicates, failed), amounts per currency, this month, recent invoices |
-| **Dashboard** | Total value, debit (purchase bills), credit (sales bills), net, GST payable / credit and companies at the top; debit and credit by month, company-wise, top suppliers and customers; for all or one company, per currency, for the last 12 months, this / last financial year (Apr-Mar) or all years. Hover a bar for the numbers; "Show as a table" lists them |
-| **Companies** | One folder per company: invoices, debit, credit, the company's own GSTIN (found from its invoices), and Open / Dashboard / Excel / Files (ZIP) |
+| **Dashboard** | Total value, purchases (bills the company pays), sales (bills it raises), net, GST payable / to claim and companies at the top; purchases and sales by month, company-wise, top suppliers and customers; for all or one company, per currency, for the last 12 months, this / last financial year (Apr-Mar) or all years. Hover a bar for the numbers; "Show as a table" lists them |
+| **Companies** | **Your companies** (typed once, with their GSTINs if wanted): a bill where one of them is the seller is a sale, where it is the buyer a purchase, and every invoice goes into the folder of the company it names. One folder per company: invoices, purchases, sales, the company's own GSTIN (typed, or found from its invoices), and Open / Dashboard / Excel / Files (ZIP) |
 | **Add invoices** | One place for everything: pick the company, then drop or choose PDFs, photos, a ZIP or a whole folder, take photos with the phone camera, or paste a copied picture (Ctrl+V, read straight away). The files are listed (thumbnail, size, remove) before they are sent with a progress bar; one invoice opens at once, more go to a background batch |
 | **Invoices** | Search and filter all invoices (status, review status, needs review), Excel / CSV export |
 | **Review queue** | Only the invoices a person must check: low confidence, failed checks, missing fields or a possible duplicate |
@@ -569,7 +569,7 @@ invoice_parser/
   schema.py                 canonical fields, synonyms, guard words
   extract.py                fields, party blocks, line items, cross-checks, GST checks
   normalize.py              amounts, amount in words, dates, GSTIN check digit + OCR repair, currency
-  companies.py              company folders, debit / credit side, dashboard figures
+  companies.py              company folders, your companies, purchase / sale side, dashboard figures
   settings.py               settings changed in the app (scanner folder)
 templates/, static/         Plain HTML, CSS and JS pages
 scripts/import_folder.py          bulk import of a folder (thousands of files)

@@ -1,16 +1,19 @@
-"""Companies (one folder each) and the debit / credit side of every invoice.
+"""Companies (one folder each) and the side of every invoice: purchase or sale.
 
 Every invoice can belong to one company: the business whose books it is part of. It is picked when
 uploading; an invoice uploaded without one goes to the known company that it names (as seller or
-buyer, by GSTIN or name), if exactly one does.
+buyer, by GSTIN or name), if exactly one does. "Your companies" (the businesses that use the app,
+typed once on the Companies page with their GSTINs if wanted) are known companies even before any
+invoice is in their folders.
 
 For its company an invoice is
-  * a purchase -> debit  (the company is the buyer: money it pays), or
-  * a sale     -> credit (the company is the seller: money it receives).
-The company's own GSTIN is learned from its invoices (the party whose name matches the company, else
-the GSTIN on most of them), so the side is found even when the company name is short, like "JP".
-A reviewer can set the side by hand (entry_type). Invoices without a company count as purchases,
-like the bills a business receives.
+  * a purchase (the company is the buyer: money it pays), or
+  * a sale     (the company is the seller: money it receives).
+The company's own GSTIN is the one typed for it, else learned from its invoices (the party whose name
+matches the company, else the GSTIN on most of them), so the side is found even when the company name
+is short, like "JP". A reviewer can set the side by hand (entry_type). Invoices without a company count
+as purchases, like the bills a business receives.
+(Inside the code and the stored figures purchases are still called 'debit' and sales 'credit'.)
 """
 import re
 import time
@@ -38,6 +41,41 @@ def clean_company(name, known=()):
         if other.lower() == name.lower():
             return other
     return name
+
+
+OWN_COMPANIES_MAX = 20
+_GSTIN_RE = re.compile(r"\b\d{2}[A-Z]{5}\d{4}[A-Z][0-9A-Z]Z[0-9A-Z]\b")
+
+
+def parse_own_companies(text):
+    """'Your companies' as typed, one per line: a name, with the GSTIN anywhere on the line if wanted
+    ('Kavya Infotech Pvt Ltd, GSTIN 06BKXPT4822Q3ZY') -> [{"name", "gstin"}]. A line without a name is
+    left out."""
+    firms, seen = [], set()
+    for line in (text or "").splitlines():
+        found = _GSTIN_RE.search(line.upper())
+        gstin = found.group(0) if found else None
+        if found:  # the GSTIN and its label are not part of the name
+            line = line[:found.start()] + line[found.end():]
+            line = re.sub(r"(?i)\bGST(?:IN)?(?:\s*/\s*UIN)?\b\s*(?:no\b\.?|number\b)?", " ", line)
+        name = clean_company(line.strip(" \t,;:|-"))
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            firms.append({"name": name, "gstin": gstin})
+    return firms[:OWN_COMPANIES_MAX]
+
+
+def own_companies_text(firms):
+    """The text of the 'Your companies' box: one company per line, its GSTIN after a comma."""
+    return "\n".join(f["name"] + (f", {f['gstin']}" if f.get("gstin") else "") for f in firms or [])
+
+
+def known_companies(folder_names, firms):
+    """Every known company: the folders that hold invoices and your own companies (one spelling each)."""
+    names = {n.lower(): n for n in folder_names if n}
+    for f in firms or []:
+        names.setdefault(f["name"].lower(), f["name"])
+    return sorted(names.values(), key=str.lower)
 
 
 @lru_cache(maxsize=8192)
@@ -96,13 +134,19 @@ def _identity(company, rows):
     return None
 
 
-def company_gstins(rows):
-    """{company: its GSTIN or None} for the companies of these invoices."""
+def company_gstins(rows, own=()):
+    """{company: its GSTIN or None} for the companies of these invoices and your own companies (own:
+    [{"name", "gstin"}]); a GSTIN typed for one of your companies wins over the one learned."""
     groups = defaultdict(list)
     for r in rows:
         if r.get("company"):
             groups[r["company"]].append(r)
-    return {c: _identity(c, rs) for c, rs in groups.items()}
+    gstins = {c: _identity(c, rs) for c, rs in groups.items()}
+    for f in own or ():
+        gstin = _gstin(f.get("gstin"))
+        if gstin or f["name"] not in gstins:
+            gstins[f["name"]] = gstin or gstins.get(f["name"])
+    return gstins
 
 
 def side_of(row, gstin=None):
@@ -121,9 +165,9 @@ def side_of(row, gstin=None):
     return PURCHASE
 
 
-def with_sides(rows, money_rows):
+def with_sides(rows, money_rows, own=()):
     """Rows (exports, data sheet) with 'entry_type' set to the side the invoice counts on."""
-    gstins = company_gstins(money_rows)
+    gstins = company_gstins(money_rows, own)
     for r in rows:
         r["entry_type"] = side_of(r, gstins.get(r.get("company")))
     return rows
@@ -148,7 +192,7 @@ def _gstins_for_guessing(store):
     now = time.monotonic()
     kept = getattr(store, "_gstins_for_guessing", None)
     if kept is None or now - kept[0] > GSTINS_KEPT_SECONDS:
-        kept = (now, company_gstins(store.money_rows()))
+        kept = (now, company_gstins(store.money_rows(), store.own_companies()))
         store._gstins_for_guessing = kept
     return kept[1]
 
@@ -165,6 +209,30 @@ def auto_company(store, invoice_id):
     if hit:
         store.set_company([invoice_id], hit)
     return hit
+
+
+def file_without_company(store, passes=3):
+    """Put every processed invoice without a company into the one known company it names (seller or
+    buyer), keeping a side set by hand. Run when your companies are saved (new invoices go there as
+    they are processed). A company's GSTIN learned from the invoices just filed by its name finds the
+    ones where its name was misread, in the next pass. Returns how many were moved."""
+    moved = 0
+    for _ in range(passes):
+        store._gstins_for_guessing = None  # your companies, or what is in their folders, changed
+        companies = store.company_names()
+        if not companies:
+            break
+        gstins = _gstins_for_guessing(store)
+        now = 0
+        for row in store.export_rows(status="done", company=NO_COMPANY):
+            hit = guess_company(row, companies, gstins)
+            if hit:
+                now += store.set_company([row["id"]], hit, row.get("entry_type"))
+        moved += now
+        if not now:
+            break
+    store._gstins_for_guessing = None
+    return moved
 
 
 def _period(period, today):
@@ -210,13 +278,14 @@ def _top_parties(rows, side, limit=10):
     return sorted(out, key=lambda v: (-v["total"], v["name"]))[:limit]
 
 
-def build_dashboard(rows, currency=None, period="12m", today=None, company=None, known=()):
+def build_dashboard(rows, currency=None, period="12m", today=None, company=None, known=(), own=()):
     """Dashboard figures from the counted invoices (MONEY_FIELDS), for ONE currency (amounts in different
     currencies are never added together), one period of invoice dates and all or one company.
     period: '12m' last 12 months, 'fy' this financial year (Apr-Mar), 'lfy' last financial year,
-    'all' everything (shown per year). known: every company name (also those with nothing counted yet)."""
+    'all' everything (shown per year). known: every company name (also those with nothing counted yet).
+    own: your companies [{"name", "gstin"}]."""
     today = today or datetime.now().date()
-    gstins = company_gstins(rows)
+    gstins = company_gstins(rows, own)
     companies = sorted({r["company"] for r in rows if r.get("company")} | set(known), key=str.lower)
     has_unassigned = any(not r.get("company") for r in rows)
     if company == NO_COMPANY:
@@ -226,7 +295,7 @@ def build_dashboard(rows, currency=None, period="12m", today=None, company=None,
     else:
         company = None
     base = {"companies": companies, "company": company, "has_unassigned": has_unassigned,
-            "company_gstin": gstins.get(company)}
+            "company_gstin": gstins.get(company), "own_companies": bool(own)}
 
     counts, last = Counter(), {}
     for r in rows:
@@ -303,10 +372,15 @@ def build_dashboard(rows, currency=None, period="12m", today=None, company=None,
             "undated": undated, "by_year": month_keys is None}
 
 
-def folders(counts, money_rows):
-    """The Companies page: one folder per company (and one for invoices without a company).
+def folders(counts, money_rows, own=()):
+    """The Companies page: one folder per company (and one for invoices without a company); your own
+    companies have one even while it is empty.
     counts: {company or None: {"invoices", "needs_review", "last_added"}} from the store."""
-    gstins = company_gstins(money_rows)
+    gstins = company_gstins(money_rows, own)
+    counts = dict(counts)
+    for name in known_companies((), own):
+        if not any(c and c.lower() == name.lower() for c in counts):
+            counts[name] = {"invoices": 0, "needs_review": 0, "last_added": None}
     money = defaultdict(lambda: defaultdict(lambda: {"debit": 0.0, "credit": 0.0}))
     for r in money_rows:
         if not r.get("currency"):

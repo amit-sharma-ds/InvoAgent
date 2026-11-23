@@ -224,8 +224,9 @@ def test_dashboard(client):
     _upload(client, _to_pdf(_colon_layout) + b"%dash", "dash.pdf")
     page = client.get("/dashboard?period=all&currency=USD")
     html = page.data.decode("utf-8")
-    assert page.status_code == 200 and "Debit and credit by year" in html and "Top suppliers" in html
-    assert "Acme Traders Pvt Ltd" in html and 'class="vbar"' in html and "Credit · sales" in html
+    assert page.status_code == 200 and "Purchases and sales by year" in html and "Top suppliers" in html
+    assert "Acme Traders Pvt Ltd" in html and 'class="vbar"' in html and "Sales</li>" in html
+    assert "Debit" not in html and "Credit" not in html
     assert client.get("/dashboard?period=fy&currency=XYZ").status_code == 200  # unknown currency: falls back
 
 
@@ -351,8 +352,8 @@ def test_company_folders(client):
     listed = client.get("/invoices?company=Kavya+Infotech").data.decode("utf-8")
     assert f'value="{first}"' in listed and f'value="{second}"' in listed
 
-    # the sample's parties are not the company: purchase (debit) unless set by hand
-    assert "Auto: Purchase · debit" in client.get(f"/invoices/{first}").data.decode("utf-8")
+    # the sample's parties are not the company: purchase unless set by hand
+    assert "Auto: Purchase<" in client.get(f"/invoices/{first}").data.decode("utf-8")
     client.post(f"/invoices/{first}/company", data={"company": "Kavya Infotech", "entry_type": "sale"})
     assert store.get(first)["entry_type"] == "sale"
     assert 'value="sale" selected' in client.get(f"/invoices/{first}").data.decode("utf-8")
@@ -371,3 +372,29 @@ def test_company_folders(client):
     assert store.get(second)["company"] == "OM TRADERS" and store.get(first)["company"] == "Kavya Infotech"
     client.post("/invoices/move", data={"ids": [str(first), str(second)], "company": ""})
     assert store.get(first)["company"] is None and store.get(first)["entry_type"] is None
+
+
+def test_your_companies_make_their_bills_sales(client):
+    """Your companies typed once: their sales bills count as sales without picking a folder."""
+    store = app_module.store()
+    first = _upload(client, _to_pdf(_colon_layout) + b"%own1", "own1.pdf")  # seller: Acme Traders Pvt Ltd
+    try:
+        assert store.get(first)["company"] is None
+        assert "Your companies are not set" in client.get("/dashboard?period=all").data.decode("utf-8")
+        resp = client.post("/companies/own", data={"companies": "Acme Traders, GSTIN 27ABCDE1234F1Z0\nOM TRADERS"})
+        assert resp.status_code == 302 and store.get(first)["company"] == "Acme Traders"
+        html = client.get("/companies").data.decode("utf-8")
+        assert "Acme Traders, 27ABCDE1234F1Z0\nOM TRADERS</textarea>" in html
+        assert " without a company moved into their folder." in html  # also the earlier tests' samples
+        assert '<strong class="folder-name">OM TRADERS</strong>' in html  # an empty folder for your company
+        assert "Auto: Sale<" in client.get(f"/invoices/{first}").data.decode("utf-8")
+        second = _upload(client, _to_pdf(_colon_layout) + b"%own2", "own2.pdf")
+        assert store.get(second)["company"] == "Acme Traders"  # new invoices go there by themselves
+        dash = store.dashboard(period="all", company="Acme Traders")
+        assert dash["summary"]["credit_n"] >= 1 and dash["summary"]["debit_n"] == 0  # all its bills are sales
+        assert "Your companies are not set" not in client.get("/dashboard?period=all").data.decode("utf-8")
+    finally:  # the other tests' invoices go back to no company
+        client.post("/companies/own", data={"companies": ""})
+        store.delete([i for i in (first, locals().get("second")) if i])
+        store.set_company([r["id"] for r in store.export_rows(company="Acme Traders")], None)
+    assert store.own_companies() == [] and "Acme Traders" not in store.company_names()

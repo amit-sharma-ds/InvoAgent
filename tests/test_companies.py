@@ -1,9 +1,10 @@
-"""Company folders: names, the company's own GSTIN, debit / credit and the dashboard figures.
-Made-up firms and GSTINs only."""
+"""Company folders: names, your companies, the company's own GSTIN, purchase / sale and the dashboard
+figures. Made-up firms and GSTINs only."""
 from datetime import date
 
 from invoice_parser.companies import (NO_COMPANY, PURCHASE, SALE, build_dashboard, clean_company,
-                                      company_gstins, folders, guess_company, names_match, side_of)
+                                      company_gstins, folders, guess_company, known_companies, names_match,
+                                      own_companies_text, parse_own_companies, side_of)
 
 OWN, SUPPLIER, CUSTOMER = "06BKXPT4822Q3ZY", "09AGHPR3344C1ZG", "06AJKPM6655F1ZZ"
 
@@ -106,6 +107,9 @@ def test_a_folder_of_uploads_reads_the_saved_invoices_once():
         def company_names(self):
             return ["JP"]
 
+        def own_companies(self):
+            return []
+
         def get(self, n):
             return {**_row(n, None, "OM TRADERS", SUPPLIER, "Anyone", OWN, 1.0, 0.0), "status": "done"}
 
@@ -116,6 +120,47 @@ def test_a_folder_of_uploads_reads_the_saved_invoices_once():
     for n in range(10, 60):
         assert auto_company(store, n) == "JP"
     assert Store.reads == 1 and len(Store.moved) == 50
+
+
+def test_your_companies_are_read_from_the_box():
+    text = ("Kavya Infotech Pvt Ltd, GSTIN/UIN: 06bkxpt4822q3zy\n  om   traders \n\n"
+            "09AGHPR3344C1ZG\nOM Traders\nGST Seva Kendra")
+    firms = parse_own_companies(text)
+    assert firms == [{"name": "Kavya Infotech Pvt Ltd", "gstin": OWN}, {"name": "om traders", "gstin": None},
+                     {"name": "GST Seva Kendra", "gstin": None}]  # a GSTIN alone or a name twice: left out
+    assert parse_own_companies(own_companies_text(firms)) == firms
+    assert parse_own_companies("") == [] and parse_own_companies(None) == []
+    assert known_companies(["kavya infotech pvt ltd", "JP"], firms) == ["GST Seva Kendra", "JP",
+                                                                         "kavya infotech pvt ltd", "om traders"]
+
+
+def test_your_companies_decide_purchase_or_sale():
+    """Bills uploaded without a company: your company is the seller -> a sale, the buyer -> a purchase,
+    found by the GSTIN typed for it even when its name was misread."""
+    own = [{"name": "Kavya Infotech", "gstin": OWN}, {"name": "OM TRADERS", "gstin": None}]
+    gstins = company_gstins([], own)
+    assert gstins == {"Kavya Infotech": OWN, "OM TRADERS": None}
+    names = known_companies([], own)
+    sale = _row(1, None, "Kavya lnfotecb", OWN, "Shri SunElectricals", CUSTOMER, 2360.0, 360.0)
+    bought = _row(2, None, "Ganesha Softech", SUPPLIER, "M/s Kavya Infotech Pvt Ltd", OWN, 1180.0, 180.0)
+    other = _row(3, None, "Ganesha Softech", SUPPLIER, "OM Traders", None, 590.0, 90.0)
+    rows = [sale, bought, other]
+    for r in rows:
+        r["company"] = guess_company(r, names, gstins)
+    assert [r["company"] for r in rows] == ["Kavya Infotech", "Kavya Infotech", "OM TRADERS"]
+    assert [side_of(r, gstins.get(r["company"])) for r in rows] == [SALE, PURCHASE, PURCHASE]
+    # the GSTIN typed for a company wins over the one learned from its invoices
+    learned = [_row(i, "JP", "OM TRADERS", SUPPLIER, "JP Enterprises", CUSTOMER, 1.0, 0.0) for i in range(3)]
+    assert company_gstins(learned) == {"JP": CUSTOMER}
+    assert company_gstins(learned, [{"name": "JP", "gstin": OWN}]) == {"JP": OWN}
+    d = build_dashboard([dict(r) for r in rows], period="all", known=names, own=own)
+    assert (d["summary"]["credit"], d["summary"]["debit"], d["own_companies"]) == (2360.0, 1770.0, True)
+    assert not build_dashboard([dict(r) for r in ROWS], period="all")["own_companies"]
+    # your company has a folder even before any invoice is in it
+    shown = folders({"Kavya Infotech": {"invoices": 2, "needs_review": 0, "last_added": "2026-11-20"}},
+                    [dict(sale), dict(bought)], own)
+    assert [(f["name"], f["invoices"], f["credit"]) for f in shown] == [("Kavya Infotech", 2, 2360.0),
+                                                                        ("OM TRADERS", 0, 0.0)]
 
 
 def test_invoices_without_a_currency_are_counted_as_missing_not_hidden():

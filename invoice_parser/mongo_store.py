@@ -30,7 +30,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import config
-from .companies import ENTRY_TYPES, MONEY_FIELDS, NO_COMPANY, build_dashboard
+from .companies import ENTRY_TYPES, MONEY_FIELDS, NO_COMPANY, build_dashboard, known_companies
 from .storage import (EXPORT_COLUMNS, INVOICE_COLUMNS, REVIEW_STATUSES, STATUSES, TABLE_COLUMNS, _minutes_ago,
                       _now, corrections, flatten, invoice_key)
 
@@ -522,7 +522,8 @@ class MongoInvoiceStore:
 
     def dashboard(self, currency=None, period="12m", today=None, company=None):
         """Figures for the Dashboard tab (see companies.build_dashboard)."""
-        return build_dashboard(self.money_rows(), currency, period, today, company, self.company_names())
+        return build_dashboard(self.money_rows(), currency, period, today, company, self.company_names(),
+                               self.own_companies())
 
     # --- companies (folders) ------------------------------------------------------------
     def money_rows(self, company=None):
@@ -531,7 +532,16 @@ class MongoInvoiceStore:
         return [self._row(d, MONEY_FIELDS) for d in docs.sort("id", 1)]
 
     def company_names(self):
-        return sorted((c for c in self.invoices.distinct("company") if c), key=str.lower)
+        """Every known company: the folders that hold invoices and your own companies."""
+        return known_companies(self.invoices.distinct("company"), self.own_companies())
+
+    def own_companies(self):
+        """Your own companies, set on the Companies page: [{"name", "gstin"}]."""
+        doc = self.db.app_settings.find_one({"_id": "own_companies"})
+        return list(doc["value"]) if doc else []
+
+    def set_own_companies(self, firms):
+        self.db.app_settings.update_one({"_id": "own_companies"}, {"$set": {"value": list(firms)}}, upsert=True)
 
     def company_counts(self):
         """{company or None: {"invoices", "needs_review", "last_added"}}, one entry per company folder."""

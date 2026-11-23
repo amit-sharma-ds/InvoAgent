@@ -12,9 +12,14 @@
   <div class="result-head">
     <div>
       <h1>Dashboard{% if d.company == NO_COMPANY %} · No company{% elif d.company %} · {{ d.company }}{% endif %}</h1>
-      <p class="muted small">By invoice date. <strong>Debit</strong> = purchase bills (money the company pays),
-        <strong>credit</strong> = sales bills (money it receives). Rejected invoices and duplicate copies are not
+      <p class="muted small">By invoice date. <strong>Purchases</strong> = bills the company pays,
+        <strong>sales</strong> = bills it raises (money it receives). Rejected invoices and duplicate copies are not
         counted, and different currencies are never added together.
+        {% if not d.own_companies and d.has_unassigned %}
+          <br><strong>Your companies are not set:</strong> invoices without a company count as purchases, also your
+          sales bills. <a href="{{ url_for('companies', _anchor='own-companies') }}">Set your companies</a> once and
+          every bill counts as a sale or a purchase by itself.
+        {% endif %}
         {% if d.company and d.company != NO_COMPANY %}
           {% if d.company_gstin %}{{ d.company }}'s own GSTIN, found from its invoices: {{ d.company_gstin }}.{% endif %}
           <a href="{{ url_for('invoices', company=d.company) }}">Open its folder</a>
@@ -69,22 +74,22 @@
     <span class="kpi-sub">{{ cur }} · {{ s.invoices }} invoice{{ 's' if s.invoices != 1 }}</span>
   </div>
   <div class="kpi">
-    <span class="kpi-label"><span class="swatch debit"></span>Debit · purchases</span>
+    <span class="kpi-label"><span class="swatch debit"></span>Purchases</span>
     <span class="kpi-num">{{ s.debit | amount(cur) }}</span>
     <span class="kpi-sub">{{ s.debit_n }} bill{{ 's' if s.debit_n != 1 }} · money paid</span>
   </div>
   <div class="kpi">
-    <span class="kpi-label"><span class="swatch credit"></span>Credit · sales</span>
+    <span class="kpi-label"><span class="swatch credit"></span>Sales</span>
     <span class="kpi-num">{{ s.credit | amount(cur) }}</span>
     <span class="kpi-sub">{{ s.credit_n }} bill{{ 's' if s.credit_n != 1 }} · money received</span>
   </div>
   <div class="kpi">
-    <span class="kpi-label">Net (credit − debit)</span>
+    <span class="kpi-label">Net (sales − purchases)</span>
     <span class="kpi-num">{{ s.net | amount(cur) }}</span>
     <span class="kpi-sub">{% if s.net > 0 %}more received than paid{% elif s.net < 0 %}more paid than received{% else %}received = paid{% endif %}</span>
   </div>
   <div class="kpi">
-    <span class="kpi-label">{{ 'GST payable' if s.gst_net > 0 else 'GST credit (ITC)' }}</span>
+    <span class="kpi-label">{{ 'GST payable' if s.gst_net > 0 else 'GST to claim (ITC)' }}</span>
     <span class="kpi-num">{{ (s.gst_net | abs) | amount(cur) }}</span>
     <span class="kpi-sub">output {{ s.tax_out | amount(cur) }} − input {{ s.tax_in | amount(cur) }}</span>
   </div>
@@ -96,15 +101,15 @@
 </section>
 
 <section class="card viz">
-  <h2>Debit and credit by {{ 'year' if d.by_year else 'month' }} ({{ cur }})</h2>
+  <h2>Purchases and sales by {{ 'year' if d.by_year else 'month' }} ({{ cur }})</h2>
   <ul class="viz-legend">
-    <li><span class="swatch debit"></span>Debit · purchases</li>
-    <li><span class="swatch credit"></span>Credit · sales</li>
+    <li><span class="swatch debit"></span>Purchases</li>
+    <li><span class="swatch credit"></span>Sales</li>
   </ul>
   {% if s.invoices == 0 %}
     <p class="muted">No {{ cur }} invoices dated in this period. Try another period.</p>
   {% else %}
-  <div class="vchart" role="img" aria-label="Debit and credit by {{ 'year' if d.by_year else 'month' }} in {{ cur }}; the table below has the numbers.">
+  <div class="vchart" role="img" aria-label="Purchases and sales by {{ 'year' if d.by_year else 'month' }} in {{ cur }}; the table below has the numbers.">
     <div class="vchart-axis">
       <span>{{ d.axis_max | amount(cur) }}</span><span>{{ (d.axis_max / 2) | amount(cur) }}</span><span>0</span>
     </div>
@@ -112,7 +117,7 @@
       <div class="vchart-grid"><i></i><i></i><i></i></div>
       {% for b in d.buckets %}
         <div class="vbar" tabindex="0"
-             data-tip="{{ long_label(b.key) }}&#10;Debit {{ b.debit | amount(cur) }} (GST {{ b.debit_tax | amount(cur) }})&#10;Credit {{ b.credit | amount(cur) }} (GST {{ b.credit_tax | amount(cur) }})&#10;{{ b.invoices }} invoice{{ 's' if b.invoices != 1 }}">
+             data-tip="{{ long_label(b.key) }}&#10;Purchases {{ b.debit | amount(cur) }} (GST {{ b.debit_tax | amount(cur) }})&#10;Sales {{ b.credit | amount(cur) }} (GST {{ b.credit_tax | amount(cur) }})&#10;{{ b.invoices }} invoice{{ 's' if b.invoices != 1 }}">
           <div class="vbar-pair">
             <div class="b debit{% if b.debit > 0 %} nz{% endif %}" style="height: {{ pct(b.debit, d.axis_max) }}%"></div>
             <div class="b credit{% if b.credit > 0 %} nz{% endif %}" style="height: {{ pct(b.credit, d.axis_max) }}%"></div>
@@ -131,8 +136,8 @@
   <details>
     <summary>Show as a table</summary>
     <div class="table-wrap"><table class="kv">
-      <thead><tr><th>{{ 'Year' if d.by_year else 'Month' }}</th><th class="num">Invoices</th><th class="num">Debit</th>
-        <th class="num">Credit</th><th class="num">Input GST</th><th class="num">Output GST</th></tr></thead>
+      <thead><tr><th>{{ 'Year' if d.by_year else 'Month' }}</th><th class="num">Invoices</th><th class="num">Purchases</th>
+        <th class="num">Sales</th><th class="num">Input GST</th><th class="num">Output GST</th></tr></thead>
       <tbody>
         {% for b in d.buckets %}<tr><td>{{ long_label(b.key) }}</td><td class="num">{{ b.invoices }}</td>
           <td class="num">{{ b.debit | amount(cur) }}</td><td class="num">{{ b.credit | amount(cur) }}</td>
@@ -150,13 +155,13 @@
     <a class="small" href="{{ url_for('companies') }}">All company folders</a>
   </div>
   <ul class="viz-legend">
-    <li><span class="swatch debit"></span>Debit · purchases</li>
-    <li><span class="swatch credit"></span>Credit · sales</li>
+    <li><span class="swatch debit"></span>Purchases</li>
+    <li><span class="swatch credit"></span>Sales</li>
   </ul>
   <ul class="hbars">
     {% for c in d.company_rows %}
       <li data-href="{{ url_with('dashboard', company=c.name or NO_COMPANY) }}" tabindex="0"
-          title="{{ c.name or 'No company' }}: debit {{ c.debit | amount(cur) }}, credit {{ c.credit | amount(cur) }} {{ cur }} in {{ c.invoices }} invoice{{ 's' if c.invoices != 1 }}">
+          title="{{ c.name or 'No company' }}: purchases {{ c.debit | amount(cur) }}, sales {{ c.credit | amount(cur) }} {{ cur }} in {{ c.invoices }} invoice{{ 's' if c.invoices != 1 }}">
         <span class="hbar-name">{{ c.name or 'No company' }}{% if c.gstin %} <span class="muted small">{{ c.gstin }}</span>{% endif %}</span>
         <span class="hbar-track pair">
           <span class="hbar debit{% if not c.debit %} zero{% endif %}" style="width: {{ pct(c.debit, d.company_max) }}%"></span>
@@ -170,7 +175,7 @@
   <details>
     <summary>Show as a table</summary>
     <div class="table-wrap"><table class="kv">
-      <thead><tr><th>Company</th><th class="num">Invoices</th><th class="num">Debit</th><th class="num">Credit</th><th class="num">Net</th></tr></thead>
+      <thead><tr><th>Company</th><th class="num">Invoices</th><th class="num">Purchases</th><th class="num">Sales</th><th class="num">Net</th></tr></thead>
       <tbody>
         {% for c in d.company_rows %}<tr><td>{{ c.name or 'No company' }}</td><td class="num">{{ c.invoices }}</td>
           <td class="num">{{ c.debit | amount(cur) }}</td><td class="num">{{ c.credit | amount(cur) }}</td>
@@ -183,7 +188,7 @@
 
 <section class="dash-pair">
   <div class="card viz">
-    <h2>Top suppliers · debit ({{ cur }})</h2>
+    <h2>Top suppliers · purchases ({{ cur }})</h2>
     {% if d.vendors %}
     <ul class="hbars">
       {% for v in d.vendors %}
@@ -200,7 +205,7 @@
     {% endif %}
   </div>
   <div class="card viz">
-    <h2>Top customers · credit ({{ cur }})</h2>
+    <h2>Top customers · sales ({{ cur }})</h2>
     {% if d.customers %}
     <ul class="hbars">
       {% for v in d.customers %}
@@ -213,8 +218,9 @@
       {% endfor %}
     </ul>
     {% else %}
-      <p class="muted">No sales bills in this period. An invoice counts as a sale when its company is the seller;
-        set it on the invoice page if it was not found.</p>
+      <p class="muted">No sales bills in this period. An invoice counts as a sale when its company is the seller
+        (<a href="{{ url_for('companies', _anchor='own-companies') }}">your companies</a>); set it on the invoice page
+        if it was not found.</p>
     {% endif %}
   </div>
 </section>
