@@ -1,6 +1,6 @@
 """Flask web app for the invoice parser.
 
-Sidebar tabs: Overview, Dashboard, Companies, Upload (files, phone camera photo, paste), Invoices,
+Sidebar tabs: Dashboard (the start page), Companies, Upload (files, phone camera photo, paste), Invoices,
 Review queue, Data sheet, Vendors, Scanner.
 Data: MongoDB when MONGODB_URI is set (shared by every computer and the server), else SQLite in
 data/live (see config.py).
@@ -288,7 +288,8 @@ def _store_and_process(name, data, company=None):
 # --- pages -------------------------------------------------------------------------------
 @app.get("/")
 def index():
-    return render_template("overview.html", overview=store().overview())
+    """The Dashboard is the start page (it also has what the Overview tab had: counts and recent invoices)."""
+    return redirect(url_for("dashboard"))
 
 
 @app.get("/upload")
@@ -399,7 +400,7 @@ def dashboard():
     data["vendor_max"] = max((v["total"] or 0 for v in data["vendors"]), default=0) or 1
     data["customer_max"] = max((v["total"] or 0 for v in data["customers"]), default=0) or 1
     data["company_max"] = max((max(c["debit"], c["credit"]) for c in data["company_rows"]), default=0) or 1
-    return render_template("dashboard.html", d=data, periods=[("12m", "Last 12 months"),
+    return render_template("dashboard.html", d=data, ov=store().overview(), periods=[("12m", "Last 12 months"),
                            ("fy", "This financial year"), ("lfy", "Last financial year"), ("all", "All years")])
 
 

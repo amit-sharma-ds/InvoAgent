@@ -52,6 +52,17 @@
   </div>
 </section>
 
+{% if ov.total %}
+<section class="stat-grid stat-strip" aria-label="Invoices of all companies">
+  <a class="stat" href="{{ url_for('invoices') }}"><span class="stat-num">{{ ov.total }}</span><span>invoices{% if d.company %} · all companies{% endif %}</span></a>
+  <a class="stat warn" href="{{ url_for('invoices', review='1') }}"><span class="stat-num">{{ ov.needs_review }}</span><span>need review</span></a>
+  <a class="stat good" href="{{ url_for('invoices', rstatus='approved') }}"><span class="stat-num">{{ ov.review.get('approved', 0) }}</span><span>approved</span></a>
+  <a class="stat" href="{{ url_for('invoices', rstatus='rejected') }}"><span class="stat-num">{{ ov.review.get('rejected', 0) }}</span><span>rejected</span></a>
+  <a class="stat warn" href="{{ url_for('invoices', review='1') }}"><span class="stat-num">{{ ov.duplicates }}</span><span>possible duplicates</span></a>
+  <a class="stat" href="{{ url_for('invoices', status='failed') }}"><span class="stat-num">{{ ov.failed }}</span><span>failed</span></a>
+</section>
+{% endif %}
+
 {% if not d.currencies %}
 <section class="card empty">
   {% if d.no_currency %}
@@ -225,4 +236,39 @@
   </div>
 </section>
 {% endif %}
+
+{% if ov.recent %}
+<section class="card">
+  <div class="result-head">
+    <h2>Recent invoices</h2>
+    <a class="small" href="{{ url_for('invoices') }}">All invoices</a>
+  </div>
+  <div class="table-wrap"><table class="kv">
+    <tbody>
+      {% for r in ov.recent %}
+        <tr data-href="{{ url_for('invoice_detail', invoice_id=r.id) }}">
+          <td><a href="{{ url_for('invoice_detail', invoice_id=r.id) }}">#{{ r.id }}</a></td>
+          <td>{{ r.seller_name or r.file_name }}<br><span class="muted small">{{ r.invoice_number or 'no number' }} · {{ r.invoice_date or 'no date' }}</span></td>
+          <td class="num">{% if r.total is not none %}{{ r.total | amount(r.currency) }} {{ r.currency or '' }}{% endif %}</td>
+          <td>{% if r.status != 'done' %}<span class="status {{ r.status }}">{{ r.status }}</span>
+              {% elif r.duplicate_of %}<span class="status failed">duplicate?</span>
+              {% elif r.needs_review %}<span class="status queued">review</span>
+              {% else %}<span class="status {{ r.review_status or 'pending' }}">{{ r.review_status or 'pending' }}</span>{% endif %}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+</section>
+{% endif %}
+
+<details class="card how-it-works">
+  <summary>How invoices flow through this app</summary>
+  <ol class="steps">
+    <li><strong>Capture</strong>: upload PDFs / photos / ZIPs, import a folder, take a phone photo or paste a copied picture (all on the Add invoices page).</li>
+    <li><strong>Extract</strong>: number, dates, seller, buyer, GSTINs, line items, tax and totals are read automatically.</li>
+    <li><strong>Check</strong>: totals must add up, GSTINs must be valid, CGST must equal SGST, the same invoice must not come twice.</li>
+    <li><strong>Review</strong>: anything doubtful lands in the <a href="{{ url_for('invoices', review='1') }}">Review queue</a>. Correct values, then approve or reject.</li>
+    <li><strong>Export</strong>: the <a href="{{ url_for('data_sheet') }}">Data sheet</a> gives all data as Excel / CSV for accounting.</li>
+  </ol>
+</details>
 {% endblock %}

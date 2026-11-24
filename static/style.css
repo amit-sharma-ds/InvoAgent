@@ -143,6 +143,13 @@ table.kv th { width: 40%; font-weight: 600; color: var(--muted); }
 .empty { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .empty p { flex-basis: 100%; margin: 0 0 6px; }
 .steps li { margin-bottom: 6px; }
+.stat-strip { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 1180px) { .stat-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 520px) { .stat-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.stat-strip .stat { padding: 10px 14px; font-size: 13px; }
+.stat-strip .stat-num { font-size: 20px; }
+.how-it-works summary { cursor: pointer; font-weight: 600; }
+.how-it-works[open] summary { margin-bottom: 8px; }
 th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .btn.danger { background: #d92d20; }
 .btn.busy { opacity: .6; }

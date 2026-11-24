@@ -34,15 +34,18 @@ def _upload(client, data, name):
 
 
 def test_pages_render(client):
-    for url in ["/", "/dashboard", "/upload", "/invoices", "/invoices?review=1", "/data", "/vendors",
+    for url in ["/dashboard", "/upload", "/invoices", "/invoices?review=1", "/data", "/vendors",
                 "/companies", "/dashboard?company=-", "/invoices?company=-"]:
         assert client.get(url).status_code == 200, url
+    start = client.get("/")  # the Dashboard is the start page
+    assert start.status_code == 302 and start.headers["Location"].endswith("/dashboard")
 
 
 def test_sidebar_has_tabs_and_no_demo_workspace(client):
-    html = client.get("/").data.decode("utf-8")
-    for tab in ["Overview", "Dashboard", "Companies", "Add invoices", "Invoices", "Review queue", "Data sheet", "Vendors"]:
+    html = client.get("/dashboard").data.decode("utf-8")
+    for tab in ["Dashboard", "Companies", "Add invoices", "Invoices", "Review queue", "Data sheet", "Vendors"]:
         assert tab in html
+    assert "Overview" not in html  # one start page: its counts and recent invoices are on the Dashboard
     assert "Phone camera</a>" not in html  # the camera page is part of Add invoices
     assert "/workspace/" not in html and "Demo" not in html  # the Demo workspace was removed
     assert client.post("/workspace/demo").status_code == 404
@@ -310,6 +313,10 @@ def test_dashboard(client):
     assert page.status_code == 200 and "Purchases and sales by year" in html and "Top suppliers" in html
     assert "Acme Traders Pvt Ltd" in html and 'class="vbar"' in html and "Sales</li>" in html
     assert "Debit" not in html and "Credit" not in html
+    # what the Overview tab had: the counts of all invoices, the recent invoices, how the app works
+    assert '<span>need review</span>' in html and '<span>possible duplicates</span>' in html
+    assert "Recent invoices" in html and "Acme Traders Pvt Ltd<br>" in html
+    assert "How invoices flow through this app" in html
     assert client.get("/dashboard?period=fy&currency=XYZ").status_code == 200  # unknown currency: falls back
 
 
@@ -341,7 +348,7 @@ def test_sign_in_wrong_password_logout_and_safe_next():
     auth.record_success("127.0.0.1")
     ok = anon.post("/login", data={"username": TEST_USER, "password": TEST_PASSWORD, "next": "//evil.example/x"})
     assert ok.status_code == 302 and ok.headers["Location"] == "/"  # never sent to another site
-    page = anon.get("/").data.decode("utf-8")
+    page = anon.get("/dashboard").data.decode("utf-8")
     assert f"Signed in as <strong>{TEST_USER}</strong>" in page
     anon.post("/logout")
     assert anon.get("/").status_code == 302
@@ -399,7 +406,7 @@ def test_first_user_from_server_settings(tmp_path, monkeypatch):
 def test_scanner_page_and_folder_import(client, tmp_path):
     from invoice_parser.scanner import import_folder_once
 
-    assert client.get("/scanner").status_code == 200 and "Scanner" in client.get("/").data.decode("utf-8")
+    assert client.get("/scanner").status_code == 200 and "Scanner" in client.get("/dashboard").data.decode("utf-8")
     resp = client.post("/scanner", data={"folder": str(tmp_path / "missing"), "enabled": "1"})
     assert resp.status_code == 302 and app_module.load_settings().get("scan_folder_on") is not True
     (tmp_path / "scan-001.pdf").write_bytes(_to_pdf(_colon_layout) + b"%scanner")
