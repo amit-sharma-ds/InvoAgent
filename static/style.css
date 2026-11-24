@@ -329,6 +329,12 @@ a.kpi:hover { border-color: #c7d2fe; }
 .company-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; margin: 8px 0 4px; padding: 10px 12px;
   background: var(--bg); border-radius: 10px; }
 .company-form label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.file-view-name { overflow-wrap: anywhere; }
+.file-pages { display: flex; flex-direction: column; align-items: center; gap: 14px; margin: 0 0 16px; }
+.file-page { display: block; max-width: min(100%, 920px); height: auto; background: #fff; border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08); }
+.json-view { margin-top: 12px; }
+.json-view pre { max-height: 70vh; overflow: auto; white-space: pre; font-size: 12.5px; margin: 8px 0 0; }
 .own-companies-form { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end; }
 .own-companies-form textarea { flex: 1 1 320px; min-width: 0; max-width: 560px; padding: 8px 10px; border: 1px solid var(--border);
   border-radius: 8px; font: inherit; color: var(--text); background: #fff; resize: vertical; }

@@ -50,7 +50,7 @@
       <div class="actions">
         <a class="btn secondary" href="{{ url_for('invoices', company=key) }}">Open</a>
         <a class="btn secondary" href="{{ url_for('dashboard', company=key) }}">Dashboard</a>
-        <a class="btn secondary" href="{{ url_for('export_invoices_xlsx', company=key) }}">Excel</a>
+        <a class="btn secondary" href="{{ url_for('data_sheet', company=key) }}">View Excel</a>
         <a class="btn secondary" href="{{ url_for('company_files_zip', company=key) }}">Files (ZIP)</a>
       </div>
     </article>

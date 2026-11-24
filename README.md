@@ -61,7 +61,7 @@ Every page has a **left sidebar** with one tab per job, so new features always g
 |---|---|
 | **Overview** | Counts (invoices, need review, approved, rejected, possible duplicates, failed), amounts per currency, this month, recent invoices |
 | **Dashboard** | Total value, purchases (bills the company pays), sales (bills it raises), net, GST payable / to claim and companies at the top; purchases and sales by month, company-wise, top suppliers and customers; for all or one company, per currency, for the last 12 months, this / last financial year (Apr-Mar) or all years. Hover a bar for the numbers; "Show as a table" lists them |
-| **Companies** | **Your companies** (typed once, with their GSTINs if wanted): a bill where one of them is the seller is a sale, where it is the buyer a purchase, and every invoice goes into the folder of the company it names. One folder per company: invoices, purchases, sales, the company's own GSTIN (typed, or found from its invoices), and Open / Dashboard / Excel / Files (ZIP) |
+| **Companies** | **Your companies** (typed once, with their GSTINs if wanted): a bill where one of them is the seller is a sale, where it is the buyer a purchase, and every invoice goes into the folder of the company it names. One folder per company: invoices, purchases, sales, the company's own GSTIN (typed, or found from its invoices), and Open / Dashboard / View Excel / Files (ZIP) |
 | **Add invoices** | One place for everything: pick the company, then drop or choose PDFs, photos, a ZIP or a whole folder, take photos with the phone camera, or paste a copied picture (Ctrl+V, read straight away). The files are listed (thumbnail, size, remove) before they are sent with a progress bar; one invoice opens at once, more go to a background batch |
 | **Invoices** | Search and filter all invoices (status, review status, needs review), Excel / CSV export |
 | **Review queue** | Only the invoices a person must check: low confidence, failed checks, missing fields or a possible duplicate |
@@ -295,10 +295,13 @@ description, quantity, unit_price, amount`.
 - **Search and filters:** invoice no, seller, buyer, GSTIN or file name; status; "needs review only"; batch.
 - **Needs review:** an invoice is flagged when overall confidence is below 0.8, a required field
   (number, date, seller, total) is missing, or the totals or line items do not add up. Flagged rows are highlighted.
-- **Exports:** *Export Excel* (two sheets, real date cells), *Invoices CSV* and *Line items CSV* (UTF-8, opens
-  correctly in Excel). Exports use the current filters.
+- **Exports, viewed first:** *View Excel / CSV* (Invoices page, a company folder, a finished batch) opens the
+  Data sheet with the same filters; its buttons download Excel (two sheets, real date cells), *Invoices CSV*
+  and *Line items CSV* (UTF-8, opens correctly in Excel).
 - **Each invoice** has its own page with all fields, confidence, the source label each value came from,
-  the original file, and a *Re-process* button.
+  *View JSON* (shown on the page, with *Download JSON*), the original file, and a *Re-process* button.
+- **Original file, viewed first:** *Original file* opens a page that shows every page of the PDF or photo as a
+  picture (also on a phone, whose browser cannot show a PDF), with a *Download* button for the file itself.
 - **Data sheet tab** (`/data`): every invoice in one spreadsheet-style table with all export columns, a second
   sheet with every line item, click-to-sort columns, a filter box, "needs review only", and live totals per
   currency (USD, INR, EUR ... are never added together). Download buttons give the same data as Excel or CSV.
@@ -570,6 +573,7 @@ invoice_parser/
   extract.py                fields, party blocks, line items, cross-checks, GST checks
   normalize.py              amounts, amount in words, dates, GSTIN check digit + OCR repair, currency
   companies.py              company folders, your companies, purchase / sale side, dashboard figures
+  file_view.py              the original file's pages as pictures for the View page (PDFs and photos)
   settings.py               settings changed in the app (scanner folder)
 templates/, static/         Plain HTML, CSS and JS pages
 scripts/import_folder.py          bulk import of a folder (thousands of files)

@@ -10,9 +10,8 @@
         {{ stats.needs_review }} need review · {{ stats.queued + stats.processing }} in queue</p>
     </div>
     <div class="actions">
-      <a class="btn secondary" href="{{ url_with('export_invoices_xlsx') }}">Export Excel</a>
-      <a class="btn secondary" href="{{ url_with('export_invoices_csv') }}">Invoices CSV</a>
-      <a class="btn secondary" href="{{ url_with('export_line_items_csv') }}">Line items CSV</a>
+      <a class="btn secondary" href="{{ url_with('data_sheet') }}">View Excel / CSV</a>
+      <a class="btn secondary" href="{{ url_with('data_sheet', sheet='items') }}">View line items</a>
     </div>
   </div>
 

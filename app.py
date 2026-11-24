@@ -31,7 +31,7 @@ from pathlib import Path
 from flask import (Flask, Response, abort, flash, jsonify, redirect, render_template, request,
                    send_file, session, url_for)
 
-from invoice_parser import auth, config, fast_ocr
+from invoice_parser import auth, config, fast_ocr, file_view
 from invoice_parser.companies import (ENTRY_TYPES, NO_COMPANY, clean_company, company_gstins,
                                       file_without_company, folders, own_companies_text, parse_own_companies,
                                       side_of, with_sides)
@@ -330,13 +330,17 @@ def invoices():
 
 @app.get("/data")
 def data_sheet():
-    """Spreadsheet view: every invoice (and every line item) in one table."""
-    rows = with_sides(store().export_rows(), store().money_rows(), store().own_companies())
-    items = store().export_line_items()
+    """Spreadsheet view: every invoice (and every line item) in one table, the same rows as the Excel / CSV
+    downloads. The export buttons of the other pages open it first, with their filters (company, batch,
+    search ...); ?sheet=items shows the line items first."""
+    filters = _filters()
+    rows = with_sides(store().export_rows(**filters), store().money_rows(), store().own_companies())
+    items = store().export_line_items(**filters)
     return render_template("data.html", rows=rows[:SHEET_ROW_LIMIT], items=items[:SHEET_ROW_LIMIT * 5],
                            total_rows=len(rows), total_items=len(items), columns=EXPORT_COLUMNS,
                            item_columns=ITEM_COLUMNS, money_columns=MONEY_COLUMNS | {"unit_price", "amount"},
-                           yes_no_columns={"needs_review", "totals_ok", "line_items_ok", "edited"})
+                           yes_no_columns={"needs_review", "totals_ok", "line_items_ok", "edited"},
+                           filters=filters, items_first=request.args.get("sheet") == "items")
 
 
 @app.template_filter("amount")
@@ -476,6 +480,11 @@ def company_files_zip():
                      download_name=f"{folder}-{datetime.now():%Y%m%d-%H%M}.zip")
 
 
+NO_ORIGINAL_FILE = ("The original file is not available (the database had no space left for it); the invoice "
+                    "data is saved.")
+VIEW_PAGES_MAX = 50  # pages shown on the View page; the download has all of them
+
+
 @app.get("/invoices/<int:invoice_id>/file")
 def invoice_file(invoice_id):
     row = store().get(invoice_id)
@@ -483,9 +492,39 @@ def invoice_file(invoice_id):
         abort(404)
     path = store().file_path(row)
     if not path.exists():
-        return _back_to("invoice_detail", "The original file is not available (the database had no space "
-                        "left for it); the invoice data is saved.", invoice_id=invoice_id)
-    return send_file(path, download_name=row["file_name"])
+        return _back_to("invoice_detail", NO_ORIGINAL_FILE, invoice_id=invoice_id)
+    # ?download=1: saved as a file (the Download button of the View page); otherwise shown when the browser can
+    return send_file(path, download_name=row["file_name"], as_attachment=request.args.get("download") == "1")
+
+
+@app.get("/invoices/<int:invoice_id>/view")
+def invoice_file_view(invoice_id):
+    """The original file shown in the app, every page as a picture, with a button to download it."""
+    row = store().get(invoice_id)
+    if row is None:
+        abort(404)
+    path = store().file_path(row)
+    if not path.exists():
+        return _back_to("invoice_detail", NO_ORIGINAL_FILE, invoice_id=invoice_id)
+    pages = file_view.page_count(path, row["file_name"])
+    return render_template("file_view.html", invoice=row, pages=min(pages, VIEW_PAGES_MAX), total_pages=pages)
+
+
+@app.get("/invoices/<int:invoice_id>/view/<int:page>.jpg")
+def invoice_file_page(invoice_id, page):
+    """One page of the original file as a picture (for the View page)."""
+    row = store().get(invoice_id)
+    if row is None or page > VIEW_PAGES_MAX:
+        abort(404)
+    path = store().file_path(row)
+    try:
+        data = file_view.page_jpeg(path, row["file_name"], page) if path.exists() else None
+    except Exception:
+        app.logger.exception("Could not show page %s of invoice %s", page, invoice_id)
+        data = None
+    if data is None:
+        abort(404)
+    return Response(data, mimetype="image/jpeg", headers={"Cache-Control": "private, max-age=86400"})
 
 
 @app.post("/invoices/<int:invoice_id>/reprocess")

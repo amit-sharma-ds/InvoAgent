@@ -220,6 +220,51 @@ def test_deleting_the_original_clears_the_duplicate_pointer(client):
     assert store.get(second)["duplicate_of"] is None
 
 
+def test_the_original_file_json_and_exports_are_shown_before_downloading(client):
+    invoice_id = _upload(client, _to_pdf(_colon_layout) + b"%view", "view.pdf")
+    page = client.get(f"/invoices/{invoice_id}").data.decode("utf-8")
+    assert f'href="/invoices/{invoice_id}/view"' in page  # Original file: the View page, not the file
+    assert 'id="view-json"' in page and 'id="json-view" hidden' in page and 'id="download-json"' in page
+    view = client.get(f"/invoices/{invoice_id}/view").data.decode("utf-8")
+    assert f'src="/invoices/{invoice_id}/view/1.jpg"' in view and f"/invoices/{invoice_id}/file?download=1" in view
+    picture = client.get(f"/invoices/{invoice_id}/view/1.jpg")
+    assert picture.status_code == 200 and picture.mimetype == "image/jpeg" and picture.data[:2] == b"\xff\xd8"
+    assert client.get(f"/invoices/{invoice_id}/view/2.jpg").status_code == 404  # the PDF has one page
+    assert client.get(f"/invoices/{invoice_id}/file").headers["Content-Disposition"].startswith("inline")
+    assert client.get(f"/invoices/{invoice_id}/file?download=1").headers["Content-Disposition"].startswith(
+        "attachment")
+    assert client.get("/invoices/999999/view").status_code == 404
+
+    # the export buttons open the data sheet with the same filters; the downloads are there
+    listing = client.get("/invoices?company=-").data.decode("utf-8")
+    assert 'href="/data?company=-"' in listing and "/export/" not in listing
+    sheet = client.get("/data?company=-&sheet=items").data.decode("utf-8")
+    assert "Showing: company No company" in sheet and "/export/invoices.xlsx?company=-" in sheet
+    assert 'id="sheet-invoices" hidden' in sheet and f'href="/invoices/{invoice_id}"' in sheet
+    assert "Showing:" not in client.get("/data").data.decode("utf-8")
+
+
+def test_a_photo_is_shown_the_right_way_up(tmp_path):
+    from PIL import Image
+
+    from invoice_parser import file_view
+
+    photo = Image.new("RGB", (40, 20), "white")
+    exif = photo.getexif()
+    exif[0x0112] = 6  # taken with the phone turned: the picture must be turned to be upright
+    path = tmp_path / "photo.jpg"
+    photo.save(path, "JPEG", exif=exif)
+    assert file_view.page_count(path, "photo.jpg") == 1
+    assert Image.open(io.BytesIO(file_view.page_jpeg(path, "photo.jpg", 1))).size == (20, 40)
+    assert file_view.page_jpeg(path, "photo.jpg", 2) is None
+    clear = tmp_path / "logo.png"
+    Image.new("RGBA", (10, 10), (0, 0, 0, 0)).save(clear)
+    assert Image.open(io.BytesIO(file_view.page_jpeg(clear, "logo.png", 1))).getpixel((5, 5)) == (255, 255, 255)
+    broken = tmp_path / "broken.pdf"
+    broken.write_bytes(b"not a pdf")
+    assert file_view.page_count(broken, "broken.pdf") == 0
+
+
 def test_dashboard(client):
     _upload(client, _to_pdf(_colon_layout) + b"%dash", "dash.pdf")
     page = client.get("/dashboard?period=all&currency=USD")

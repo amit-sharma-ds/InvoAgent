@@ -58,7 +58,7 @@
     const reviewBox = document.getElementById("sheet-review");
     const summary = document.getElementById("sheet-summary");
     const tabs = document.querySelectorAll(".sheet-tab");
-    let active = document.getElementById("sheet-invoices");
+    let active = document.querySelector(".sheet-wrap:not([hidden])") || document.getElementById("sheet-invoices");
     const money = (n) => n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
     const update = () => {
@@ -119,6 +119,27 @@
     sheetFilter.addEventListener("input", update);
     reviewBox.addEventListener("change", update);
     update();
+  }
+
+  // View JSON: the invoice's data shown on the page first; Download JSON inside it saves the file
+  const viewJson = document.getElementById("view-json");
+  const jsonView = document.getElementById("json-view");
+  if (viewJson && jsonView) {
+    viewJson.addEventListener("click", () => {
+      const pre = document.getElementById("json-text");
+      if (!pre.textContent) {
+        const text = document.getElementById("result-json").textContent;
+        try {
+          pre.textContent = JSON.stringify(JSON.parse(text), null, 2);
+        } catch (e) {
+          pre.textContent = text;
+        }
+      }
+      jsonView.hidden = !jsonView.hidden;
+      viewJson.textContent = jsonView.hidden ? "View JSON" : "Hide JSON";
+      viewJson.setAttribute("aria-expanded", String(!jsonView.hidden));
+      if (!jsonView.hidden) jsonView.scrollIntoView({ behavior: "smooth", block: "start" });
+    });
   }
 
   const downloadBtn = document.getElementById("download-json");

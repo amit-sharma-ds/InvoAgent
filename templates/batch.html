@@ -16,7 +16,7 @@
   </p>
   {% if batch.complete %}
     <div class="actions">
-      <a class="btn" href="{{ url_for('export_invoices_xlsx', batch=batch.id) }}">Export this batch (Excel)</a>
+      <a class="btn" href="{{ url_for('data_sheet', batch=batch.id) }}">View this batch (Excel)</a>
       <a class="btn secondary" href="{{ url_for('invoices', batch=batch.id) }}">Open in invoice table</a>
     </div>
   {% else %}

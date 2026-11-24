@@ -77,9 +77,9 @@
   {% endif %}
 
   <div class="actions">
-    <button class="btn secondary" id="download-json" type="button">Download JSON</button>
+    <button class="btn secondary" id="view-json" type="button" aria-expanded="false" aria-controls="json-view">View JSON</button>
     {% if invoice %}
-      <a class="btn secondary" href="{{ url_for('invoice_file', invoice_id=invoice.id) }}" target="_blank">Original file</a>
+      <a class="btn secondary" href="{{ url_for('invoice_file_view', invoice_id=invoice.id) }}" target="_blank">Original file</a>
       <form method="post" action="{{ url_for('reprocess', invoice_id=invoice.id) }}" class="inline">
         <button class="btn secondary" type="submit">Re-process</button>
       </form>
@@ -90,6 +90,12 @@
       </form>
     {% endif %}
     <a class="btn secondary" href="{{ url_for('upload_page') }}">Add more invoices</a>
+  </div>
+  <div class="json-view" id="json-view" hidden>
+    <div class="actions">
+      <button class="btn secondary" id="download-json" type="button">Download JSON</button>
+    </div>
+    <pre id="json-text"></pre>
   </div>
   <script type="application/json" id="result-json">{{ result_json|safe }}</script>
 </section>

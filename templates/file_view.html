@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card">
+  <div class="result-head">
+    <div>
+      <h1 class="file-view-name">{{ invoice.file_name }}</h1>
+      <p class="muted small">Original file of invoice #{{ invoice.id }}{% if total_pages > 1 %} · {{ total_pages }} pages{% endif %}.
+        Download it only when you need the file itself.</p>
+    </div>
+    <div class="actions">
+      <a class="btn" href="{{ url_for('invoice_file', invoice_id=invoice.id, download=1) }}">Download</a>
+      <a class="btn secondary" href="{{ url_for('invoice_detail', invoice_id=invoice.id) }}">Back to the invoice</a>
+    </div>
+  </div>
+</section>
+
+{% if pages %}
+<section class="file-pages">
+  {% for n in range(1, pages + 1) %}
+    <img class="file-page" src="{{ url_for('invoice_file_page', invoice_id=invoice.id, page=n) }}"
+         alt="Page {{ n }} of {{ invoice.file_name }}" {% if n > 1 %}loading="lazy"{% endif %}>
+  {% endfor %}
+  {% if total_pages > pages %}
+    <p class="muted small">The first {{ pages }} of {{ total_pages }} pages are shown. The download has all of them.</p>
+  {% endif %}
+</section>
+{% else %}
+<section class="card">
+  <p>This file cannot be shown in the browser. Use <strong>Download</strong> to open it on this device.</p>
+</section>
+{% endif %}
+{% endblock %}
