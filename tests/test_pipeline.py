@@ -433,6 +433,19 @@ def test_the_seller_named_at_the_signature_is_found_at_the_top_of_a_short_page(p
     assert (seller["name"], seller["tax_id"]) == ("Mill Hill Tiles Pvt Ltd", "06BKXPT4822Q3ZY")
 
 
+def test_a_pdf_whose_text_hides_the_digits_is_read_as_a_picture():
+    """Some Tally PDFs map their digits to other characters ('Total $ ( #-.%- )'): such a page is read by
+    OCR; an ordinary PDF keeps its exact text."""
+    from invoice_parser.ingest import load_pages
+
+    def broken(c):
+        _colon_layout(c)
+        c.drawString(40, 470, "Total $ ( #-.%- )  Tax $% !\"  Rate #-&&-")
+
+    assert [p.method for p in load_pages("broken.pdf", _to_pdf(broken))] == ["ocr"]
+    assert [p.method for p in load_pages("fine.pdf", _to_pdf(_colon_layout))] == ["digital"]
+
+
 def test_a_real_mismatch_is_not_hidden(parser):
     """When nothing proves the right value (two digits differ), the amounts are left as read and the
     check fails, so a person looks at it."""

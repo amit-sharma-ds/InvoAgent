@@ -11,6 +11,7 @@ time, and Tesseract cannot read handwriting at all.
 """
 import io
 import logging
+import re
 from pathlib import Path
 
 import cv2
@@ -45,13 +46,26 @@ def overall_method(pages):
     return methods.pop() if len(methods) == 1 else "mixed"
 
 
+# A word of the text layer made only of symbols ('#-.%-', '$%'): the PDF's font maps its digits to other
+# characters (some Tally exports print 'Total 7,59,000.00' as 'Total $ ( #-.%- )'), so the numbers cannot be
+# read from the text. Such a page is read as a picture instead. Dot leaders and rules ('.....', '----') and
+# a lone '#:' do not count; the sample invoices have at most one such word on a page.
+_SYMBOL_WORD_RE = re.compile(r"^[^\w\s]{2,}$")
+_RULE_WORD_RE = re.compile(r"^[-._=*~·•]+$")
+GARBLED_WORDS_MIN = 4
+
+
+def _garbled_text(raw):
+    return sum(1 for w in raw if _SYMBOL_WORD_RE.match(w[4]) and not _RULE_WORD_RE.match(w[4])) >= GARBLED_WORDS_MIN
+
+
 def _load_pdf(data: bytes):
     doc = fitz.open(stream=data, filetype="pdf")
     pages = []
     for i, page in enumerate(doc):
         raw = page.get_text("words")
         w_pt, h_pt = page.rect.width, page.rect.height
-        if len(raw) >= config.MIN_DIGITAL_WORDS:
+        if len(raw) >= config.MIN_DIGITAL_WORDS and not _garbled_text(raw):
             words = [Word(t, x0 / w_pt, y0 / h_pt, x1 / w_pt, y1 / h_pt, 1.0, i)
                      for x0, y0, x1, y1, t, *_ in raw if t.strip()]
             pages.append(Page(i, words, "digital", 1.0))
