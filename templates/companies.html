@@ -14,7 +14,8 @@
 <section class="card" id="own-companies">
   <h2>Your companies</h2>
   <p class="muted small">The businesses whose bills these are. A bill where one of them is the <strong>seller</strong>
-    counts as a <strong>sale</strong>; where it is the <strong>buyer</strong>, as a <strong>purchase</strong>.
+    counts as a <strong>sale</strong>; where it is the <strong>buyer</strong>, as a <strong>purchase</strong>
+    (a bill from one of them to another is the seller's sale).
     Every new invoice goes into the folder of the company it names, and saving here moves the invoices without a
     company there too. One company per line; the GSTIN after the name is optional but surer than the name.</p>
   <form class="own-companies-form" method="post" action="{{ url_for('save_own_companies') }}">

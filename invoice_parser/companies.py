@@ -174,12 +174,20 @@ def with_sides(rows, money_rows, own=()):
 
 
 def guess_company(row, companies, gstins):
-    """The one known company this invoice names (seller or buyer), else None."""
+    """The one known company this invoice names (seller or buyer), else None. Two of them on one invoice
+    (one of your companies selling to the other): the seller's, where it is a sale."""
     parties = {_gstin(row.get("seller_tax_id")), _gstin(row.get("buyer_tax_id"))} - {None}
     hits = {c for c in companies
             if (gstins.get(c) and gstins[c] in parties)
             or names_match(c, row.get("seller_name")) or names_match(c, row.get("buyer_name"))}
-    return hits.pop() if len(hits) == 1 else None  # two known companies on one invoice: ask a person
+    if len(hits) > 1:
+        seller = _gstin(row.get("seller_tax_id"))
+
+        def sells(c):  # by GSTIN when both are known, else by name
+            return gstins[c] == seller if gstins.get(c) and seller else names_match(c, row.get("seller_name"))
+
+        hits = {c for c in hits if sells(c)}
+    return hits.pop() if len(hits) == 1 else None  # no company, or the seller not clear: ask a person
 
 
 GSTINS_KEPT_SECONDS = 60

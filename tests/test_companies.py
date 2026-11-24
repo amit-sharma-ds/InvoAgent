@@ -55,8 +55,9 @@ def test_guess_company():
     both = ["JP", "OM TRADERS"]
     assert guess_company(_row(1, None, "Anyone", SUPPLIER, "Somebody", OWN, 1.0, 0.0), both, gstins) == "JP"
     assert guess_company(_row(1, None, "OM Traders", None, "X", None, 1.0, 0.0), both, gstins) == "OM TRADERS"
-    # both companies on one invoice, or none: no guess
-    assert guess_company(_row(1, None, "OM Traders", None, "JP", OWN, 1.0, 0.0), both, gstins) is None
+    # both companies on one invoice (one sells to the other): the seller's; none: no guess
+    assert guess_company(_row(1, None, "OM Traders", None, "JP", OWN, 1.0, 0.0), both, gstins) == "OM TRADERS"
+    assert guess_company(_row(1, None, "J.P. Enterprises", OWN, "OM Traders", None, 1.0, 0.0), both, gstins) == "JP"
     assert guess_company(_row(1, None, "Nobody", None, "X", None, 1.0, 0.0), ["JP"], gstins) is None
 
 
@@ -149,6 +150,10 @@ def test_your_companies_decide_purchase_or_sale():
         r["company"] = guess_company(r, names, gstins)
     assert [r["company"] for r in rows] == ["Kavya Infotech", "Kavya Infotech", "OM TRADERS"]
     assert [side_of(r, gstins.get(r["company"])) for r in rows] == [SALE, PURCHASE, PURCHASE]
+    # one of your companies selling to the other: a sale of the seller
+    between = _row(4, None, "Kavya Infotech Pvt Ltd", OWN, "OM TRADERS", None, 118.0, 18.0)
+    assert guess_company(between, names, gstins) == "Kavya Infotech"
+    assert side_of({**between, "company": "Kavya Infotech"}, OWN) == SALE
     # the GSTIN typed for a company wins over the one learned from its invoices
     learned = [_row(i, "JP", "OM TRADERS", SUPPLIER, "JP Enterprises", CUSTOMER, 1.0, 0.0) for i in range(3)]
     assert company_gstins(learned) == {"JP": CUSTOMER}

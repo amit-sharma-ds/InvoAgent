@@ -65,10 +65,11 @@
         {{ company_input(invoice.company, id='invoice-company', placeholder='No company') }}
       </label>
       <label>Counts as
+        {% set counts_as = invoice.entry_type or invoice.side %}
+        <input type="hidden" name="side_shown" value="{{ counts_as }}">
         <select name="entry_type">
-          <option value="">Auto: {{ 'Sale' if invoice.side == 'sale' else 'Purchase' }}</option>
-          <option value="purchase" {% if invoice.entry_type == 'purchase' %}selected{% endif %}>Purchase (money paid)</option>
-          <option value="sale" {% if invoice.entry_type == 'sale' %}selected{% endif %}>Sale (money received)</option>
+          <option value="purchase" {% if counts_as != 'sale' %}selected{% endif %}>Purchase (money paid)</option>
+          <option value="sale" {% if counts_as == 'sale' %}selected{% endif %}>Sale (money received)</option>
         </select>
       </label>
       <button class="btn secondary" type="submit">Save</button>

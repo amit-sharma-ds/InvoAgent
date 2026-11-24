@@ -402,6 +402,37 @@ def test_a_name_written_with_wide_spaces_is_kept_whole(parser):
     assert buyer["address"] == "4 Oak Street"
 
 
+def _short_sale_bill(c):
+    """A one-item sale bill: the seller's name and GSTIN at the top without a label, the name misread in
+    the small print above 'Authorised Signatory' (look-alike letters)."""
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(250, 800, "Tax Invoice")
+    c.setFont("Helvetica", 10)
+    c.drawString(40, 770, "Mill Hill Tiles Pvt Ltd")
+    c.drawString(40, 756, "Plot 12, Sector 5, Gurugram, Haryana")
+    c.drawString(40, 742, "GSTIN/UIN: 06BKXPT4822Q3ZY")
+    c.drawString(330, 770, "Invoice No. MH/2026-27/014")
+    c.drawString(330, 756, "Dated 2-Sep-26")
+    c.drawString(40, 700, "Buyer (Bill to)")
+    c.drawString(40, 686, "Ganesha Softech")
+    c.drawString(40, 672, "GSTIN/UIN : 09AGHPR3344C1ZG")
+    for x, h in zip([40, 340, 410, 490], ["Description", "Qty", "Rate", "Amount"]):
+        c.drawString(x, 620, h)
+    for x, cell in zip([40, 340, 410, 490], ["Floor tiles", "10", "100.00", "1,000.00"]):
+        c.drawString(x, 604, cell)
+    c.drawString(380, 560, "IGST 18%")
+    c.drawRightString(540, 560, "180.00")
+    c.drawString(380, 546, "Total")
+    c.drawRightString(540, 546, "1,180.00")
+    c.drawString(380, 480, "for MiII HiII TiIes Pvt LId")
+    c.drawString(400, 440, "Authorised Signatory")
+
+
+def test_the_seller_named_at_the_signature_is_found_at_the_top_of_a_short_page(parser):
+    seller = parser.parse_bytes("short-sale.pdf", _to_pdf(_short_sale_bill))["fields"]["seller"]["value"]
+    assert (seller["name"], seller["tax_id"]) == ("Mill Hill Tiles Pvt Ltd", "06BKXPT4822Q3ZY")
+
+
 def test_a_real_mismatch_is_not_hidden(parser):
     """When nothing proves the right value (two digits differ), the amounts are left as read and the
     check fails, so a person looks at it."""

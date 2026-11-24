@@ -397,11 +397,18 @@ def test_company_folders(client):
     listed = client.get("/invoices?company=Kavya+Infotech").data.decode("utf-8")
     assert f'value="{first}"' in listed and f'value="{second}"' in listed
 
-    # the sample's parties are not the company: purchase unless set by hand
-    assert "Auto: Purchase<" in client.get(f"/invoices/{first}").data.decode("utf-8")
-    client.post(f"/invoices/{first}/company", data={"company": "Kavya Infotech", "entry_type": "sale"})
+    # the sample's parties are not the company: purchase unless set by hand (no 'Auto' choice)
+    page = client.get(f"/invoices/{first}").data.decode("utf-8")
+    assert 'value="purchase" selected' in page and "Auto" not in page
+    shown = {"company": "Kavya Infotech", "side_shown": "purchase"}
+    client.post(f"/invoices/{first}/company", data={**shown, "entry_type": "purchase"})
+    assert store.get(first)["entry_type"] is None  # left as shown: still found from the bill
+    client.post(f"/invoices/{first}/company", data={**shown, "entry_type": "sale"})
     assert store.get(first)["entry_type"] == "sale"
     assert 'value="sale" selected' in client.get(f"/invoices/{first}").data.decode("utf-8")
+    client.post(f"/invoices/{first}/company", data={"company": "Kavya Infotech", "side_shown": "sale",
+                                                     "entry_type": "sale"})
+    assert store.get(first)["entry_type"] == "sale"  # left as shown: the side set by hand stays
     assert "Kavya Infotech" in client.get("/dashboard?period=all").data.decode("utf-8")  # in the company filter
 
     archive = client.get("/companies/files.zip?company=Kavya+Infotech")
@@ -432,7 +439,7 @@ def test_your_companies_make_their_bills_sales(client):
         assert "Acme Traders, 27ABCDE1234F1Z0\nOM TRADERS</textarea>" in html
         assert " without a company moved into their folder." in html  # also the earlier tests' samples
         assert '<strong class="folder-name">OM TRADERS</strong>' in html  # an empty folder for your company
-        assert "Auto: Sale<" in client.get(f"/invoices/{first}").data.decode("utf-8")
+        assert 'value="sale" selected' in client.get(f"/invoices/{first}").data.decode("utf-8")
         second = _upload(client, _to_pdf(_colon_layout) + b"%own2", "own2.pdf")
         assert store.get(second)["company"] == "Acme Traders"  # new invoices go there by themselves
         dash = store.dashboard(period="all", company="Acme Traders")

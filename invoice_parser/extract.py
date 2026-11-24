@@ -765,9 +765,19 @@ def _looks_like_name(name):
 _ID_LABEL_WORDS = {"GSTIN", "STIN", "GST", "GSTN", "UIN", "TIN", "PAN", "VAT", "NO", "NUMBER", "REG"}
 
 
+_LOOK_ALIKE_LETTERS = str.maketrans("l1|!05", "iiiios")
+
+
+def _same_name(a, b):
+    """'Mill Hill Tiles Pvt Ltd' printed at the top and 'MiII HiII TiIes Pvt LId' read in the small print of
+    the signature: the same name once the look-alike letters (l / I / 1, 0 / O, 5 / S) are made equal."""
+    a, b = a.lower(), b.lower()
+    return max(fuzz.ratio(a, b), fuzz.ratio(a.translate(_LOOK_ALIKE_LETTERS), b.translate(_LOOK_ALIKE_LETTERS))) >= 85
+
+
 def _seller_from_signature(lines, label_cells):
     """'for Kavya Infotech' above 'Authorised Signatory' names the seller on most Indian invoices.
-    The same name near the top of page 1 gives the address and GSTIN."""
+    The same name near the top of page 1, above the signature, gives the address and GSTIN."""
     for i in range(len(lines) - 1, -1, -1):
         if not any(re.search(r"(?i)authori[sz]ed|signator", lines[j].text) for j in range(i, min(len(lines), i + 4))):
             continue
@@ -776,11 +786,11 @@ def _seller_from_signature(lines, label_cells):
             name = m.group(1).strip(" .,:'\"`‘’“”") if m else ""
             if len(name) < 3 or re.search(r"(?i)authori|signator", name):
                 continue
-            for top in lines[:40]:
+            for top in lines[:min(40, i)]:  # a short page: never the signature line itself
                 if top.page != 0:
                     break
                 for anchor in top.cell_boxes:
-                    if fuzz.ratio(name.lower(), anchor.text.lower()) >= 85:
+                    if _same_name(name, anchor.text):
                         value = parse_party([anchor.text] + _column_block(lines, top.index, anchor, label_cells))
                         return {"value": value, "confidence": round(0.75 * top.conf, 3),
                                 "source_label": "(name above 'Authorised Signatory')", "source_text": anchor.text,

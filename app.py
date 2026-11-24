@@ -405,12 +405,24 @@ def invoice_detail(invoice_id):
 
 @app.post("/invoices/<int:invoice_id>/company")
 def set_invoice_company(invoice_id):
-    """Move one invoice to another company and / or set its side (purchase or sale)."""
-    if store().get(invoice_id) is None:
+    """Move one invoice to another company and / or set its side (purchase or sale). A side left as it
+    was shown stays as it was (found from the bill again for another company); a side changed by hand is
+    kept, unless it is what the bill shows anyway."""
+    row = store().get(invoice_id)
+    if row is None:
         abort(404)
     company = _chosen_company(request.form.get("company"))
     entry_type = request.form.get("entry_type")
-    store().set_company([invoice_id], company, entry_type if entry_type in ENTRY_TYPES else None)
+    if entry_type not in ENTRY_TYPES:
+        entry_type = None
+    elif entry_type == request.form.get("side_shown"):
+        entry_type = row["entry_type"]  # not changed
+    else:
+        gstin = (company_gstins(store().money_rows(company=company), store().own_companies()).get(company)
+                 if company else None)
+        if side_of({**row, "company": company, "entry_type": None}, gstin) == entry_type:
+            entry_type = None
+    store().set_company([invoice_id], company, entry_type)
     flash(f"Invoice #{invoice_id} is in {company or 'no company'}.")
     return redirect(url_for("invoice_detail", invoice_id=invoice_id))
 
