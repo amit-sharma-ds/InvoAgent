@@ -224,8 +224,19 @@
   const send = $("upload-send"), msg = $("upload-msg"), bar = $("upload-progress"), company = $("upload-company");
   const fill = bar.querySelector("span");
   const maxMb = Number(form.dataset.maxMb || 300);
-  const SUPPORTED = /\.(pdf|zip|png|jpe?g|tiff?|bmp|webp)$/i;
+  const SUPPORTED = /\.(pdf|zip|png|jpe?g|jpe|jfif|tiff?|bmp|webp)$/i;
   const PASTE_TYPES = { "image/png": "png", "image/jpeg": "jpg", "image/webp": "webp", "image/bmp": "bmp", "image/tiff": "tif" };
+  const EXT_OF_TYPE = { ...PASTE_TYPES, "image/pjpeg": "jpg", "application/pdf": "pdf", "application/zip": "zip",
+                        "application/x-zip-compressed": "zip" };
+  // A picture dragged from a web page (WhatsApp Web) has no extension in its name: it is still a JPEG or a PNG,
+  // so it gets the extension of its type. null: a file that cannot be read.
+  const readable = (file) => {
+    if (SUPPORTED.test(file.name)) return file;
+    const ext = EXT_OF_TYPE[file.type];
+    if (!ext) return null;
+    const base = (file.name || "").replace(/\.[^./\\]*$/, "").trim() || `picture-${Date.now()}`;
+    return new File([file], `${base}.${ext}`, { type: file.type, lastModified: file.lastModified });
+  };
   const PREVIEW = /^image\/(png|jpeg|webp|bmp|gif)$/i;
   let items = [], busy = false;
 
@@ -277,16 +288,22 @@
   }
 
   function add(files) {
-    let skipped = 0, added = 0;
-    for (const file of files) {
-      if (!SUPPORTED.test(file.name)) { skipped += 1; continue; }
-      const key = [file.webkitRelativePath || file.name, file.size, file.lastModified].join("|");
+    let added = 0;
+    const skipped = [];
+    for (const original of files) {
+      const file = readable(original);
+      if (!file) { skipped.push(original.name || "(no name)"); continue; }
+      const key = [original.webkitRelativePath || original.name, original.size, original.lastModified].join("|");
       if (items.some((it) => it.key === key)) continue;
-      items.push({ file, key, label: file.webkitRelativePath || file.name,
+      items.push({ file, key, label: original.webkitRelativePath || file.name,
                    url: PREVIEW.test(file.type) ? URL.createObjectURL(file) : null });
       added += 1;
     }
-    if (skipped) say(`${skipped} file${skipped > 1 ? "s" : ""} skipped: only PDF, photos and ZIP files can be read.`, true);
+    if (skipped.length) {
+      const names = skipped.slice(0, 3).join(", ") + (skipped.length > 3 ? " ..." : "");
+      say(`${skipped.length} file${skipped.length > 1 ? "s" : ""} skipped (${names}): only PDF, photos (JPG, PNG, ` +
+          "WEBP, BMP, TIFF) and ZIP files can be read.", true);
+    }
     else if (added) say("");
     render();
   }

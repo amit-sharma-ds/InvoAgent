@@ -82,4 +82,5 @@ DAY_FIRST = _env_bool("DAY_FIRST", True)
 # --- Uploads -----------------------------------------------------------------
 MAX_UPLOAD_MB = int(os.environ.get("MAX_UPLOAD_MB", "300"))  # whole request (many files or a ZIP)
 PDF_EXTENSIONS = {".pdf"}
-IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".webp"}
+# .jfif / .jpe: a JPEG under another name (Chrome on Windows saves pictures from web pages as .jfif)
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".jpe", ".jfif", ".tif", ".tiff", ".bmp", ".webp"}

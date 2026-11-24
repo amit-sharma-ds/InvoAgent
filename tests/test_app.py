@@ -244,6 +244,17 @@ def test_the_original_file_json_and_exports_are_shown_before_downloading(client)
     assert "Showing:" not in client.get("/data").data.decode("utf-8")
 
 
+def test_a_picture_saved_as_jfif_is_read(client):
+    """Chrome on Windows saves a picture from a web page as .jfif: it is a JPEG and is read like one."""
+    import fitz
+
+    with fitz.open(stream=_to_pdf(_colon_layout), filetype="pdf") as doc:
+        jpeg = doc[0].get_pixmap(dpi=150).tobytes("jpeg")
+    invoice_id = _upload(client, jpeg, "screenshot.jfif")
+    assert app_module.store().get(invoice_id)["status"] == "done"
+    assert client.get(f"/invoices/{invoice_id}/view/1.jpg").status_code == 200
+
+
 def test_a_photo_is_shown_the_right_way_up(tmp_path):
     from PIL import Image
 

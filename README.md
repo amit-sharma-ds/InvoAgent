@@ -29,7 +29,7 @@ to finished result, one invoice at a time:
 |---|---|
 | **Digital PDF** (Tally or other accounting export, an emailed PDF: it has a text layer) | **under 1 s** (about 0.03 s each in bulk) |
 | **Scanned PDF** (office scanner, a phone's *scan document* PDF: no text layer) | about **4-6 s** per page (was 13 s) |
-| **Image file** PNG / JPG / JPEG / TIFF / BMP / WEBP (a scan, a screenshot) | about **4-6 s** per page (was 18 s) |
+| **Image file** PNG / JPG / JPEG / JFIF / TIFF / BMP / WEBP (a scan, a screenshot; a picture dragged from WhatsApp Web without a file extension is read by its type) | about **4-6 s** per page (was 18 s) |
 | **Phone photo** (*Take photo* on the Add invoices page, or a photo from the gallery) | about **3-5 s** plus the upload (a SuperStore-style page ~3 s, a dense Tally GST page ~4-5 s); sideways about 5 s; upside down about 7 s |
 | **Bill-book form filled in by hand** (photo or scan) | about **6-9 s** |
 
