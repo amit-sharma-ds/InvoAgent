@@ -11,6 +11,7 @@ FIELD_SYNONYMS = {
         "invoice number", "invoice no", "invoice num", "invoice id", "invoice ref",
         "inv no", "inv number", "bill number", "bill no", "tax invoice no",
         "tax invoice number", "document number", "document no",
+        "voice no", "oice no",  # 'Invoice No.' in the corner of a box, its first letters cut off in a small photo
         "no",  # bill books print a bare "No." beside the number (only as a label of its own, see ALONE_ONLY)
     ],
     "invoice_date": [

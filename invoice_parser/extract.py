@@ -396,6 +396,14 @@ def _amount_same_row(c, lines, label_lines=frozenset()):
     return best[1] if best else None
 
 
+def _part_under(cell, label_cell):
+    """A cell that reaches in from the column on the left ('... Estate no 1 TSY/2026-27/014': an address
+    and the number below 'Invoice No.' read as one cell in a small photo): only its words under the label."""
+    if cell.x0 >= label_cell.x0 - 0.05 or not cell.words:
+        return cell.text
+    return " ".join(t for t, x0, x1 in cell.words if (x0 + x1) / 2 >= label_cell.x0 - 0.02)
+
+
 def _values_below(lines, c, label_cells, max_lines=4):
     """Texts that may be the value of a label without one, best first.
 
@@ -415,7 +423,7 @@ def _values_below(lines, c, label_cells, max_lines=4):
         cells = [(k, cell) for k, cell in enumerate(ln.cell_boxes) if _overlap(cell, label_cell) > 0]
         if any((ln.index, k) in label_cells for k, _ in cells):
             break  # the next label in this column: the value is empty
-        texts = [cell.text.strip(" |_[](){}:") for _, cell in cells]
+        texts = [_part_under(cell, label_cell).strip(" |_[](){}:") for _, cell in cells]
         if any(texts):
             out.append(next(t for t in texts if t))
             break
@@ -505,6 +513,33 @@ def _scalar(cands, field, lines, label_lines, kind, prefer_last=False, day_first
         value, penalty = _resolve(c, lines, label_lines, kind, day_first, label_cells)
         if value is not None:
             return _pack(value, c, penalty)
+    return None
+
+
+HEADER_DATE_BELOW = 0.3  # the top of page 1, where the invoice's own date is printed
+_OTHER_DATE_RE = re.compile(r"(?i)\b(due|deliver\w*|dispatch\w*|order|p\.?\s?o\b|challan|e-?way|lr|valid\w*|"
+                            r"expir\w*|ship\w*|supply|from|to|period|birth)\b")
+
+
+def _header_date(lines, day_first):
+    """No invoice date label could be read ('Dated' lost in a small photo): the first date printed by
+    itself in a box at the top of page 1, unless it or the label above it names another date (due,
+    delivery, dispatch, order ...)."""
+    for k, ln in enumerate(lines):
+        if ln.page != 0 or ln.y0 > HEADER_DATE_BELOW:
+            break
+        if _OTHER_DATE_RE.search(ln.text):
+            continue
+        above = lines[k - 1] if k and lines[k - 1].page == 0 else None
+        for cell in ln.cell_boxes:
+            iso = nz.find_date(cell.text, day_first)
+            if not iso or len(nz.strip_dates(cell.text).strip(" .,:-")) > 2:
+                continue
+            over = [a.text for a in (above.cell_boxes if above else ()) if a.x0 < cell.x1 and cell.x0 < a.x1]
+            if any(_OTHER_DATE_RE.search(t) for t in over):
+                continue
+            return {"value": iso, "confidence": round(0.5 * ln.conf, 3),
+                    "source_label": "(first date at the top of the page)", "source_text": ln.text, "page": 1}
     return None
 
 
@@ -1571,6 +1606,11 @@ def extract_invoice(lines, matcher):
 
     if fields["subtotal"] is None and fields["total"] is not None:
         fields["subtotal"] = _total_above_grand_total(cands, lines, label_lines, cells, fields["total"]["value"])
+    if fields["invoice_date"] is None:
+        fields["invoice_date"] = _header_date(lines, day_first)
+        if fields["invoice_date"]:
+            warnings.append("Invoice date is the first date at the top of the page (its 'Date' label could "
+                            "not be read): please check it.")
 
     words_total, words_line = _amount_in_words(lines)
     sub = (fields["subtotal"] or {}).get("value")

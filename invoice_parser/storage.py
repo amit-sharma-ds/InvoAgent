@@ -164,6 +164,8 @@ def known_party_names(result, store, warnings_key="warnings"):
     (so a misread GSTIN of another firm never renames a party). The change is listed in the warnings."""
     from rapidfuzz import fuzz
 
+    from .companies import _words
+
     fields = result.get("fields") or {}
     parties = [(k, (fields.get(k) or {}).get("value") or {}) for k in ("seller", "buyer")]
     ids = [p.get("tax_id") for _, p in parties if p.get("tax_id") and nz.GSTIN_RE.fullmatch(p["tax_id"])
@@ -171,12 +173,17 @@ def known_party_names(result, store, warnings_key="warnings"):
     if not ids:
         return
     known = store.approved_party_names(ids)
+    # your companies: the name typed with the GSTIN, unless the bill prints the same name with other legal
+    # words ('KAVYA INFOTECH PRIVATE LIMITED' for 'Kavya Infotech Pvt Ltd'), which is kept as printed
+    own = {f["gstin"]: f["name"] for f in (store.own_companies() if hasattr(store, "own_companies") else [])
+           if f.get("gstin") in ids}
+    known.update(own)
     learned = False
     for key, party in parties:
         name, approved = party.get("name"), known.get(party.get("tax_id"))
         if not name or not approved:
             continue
-        if name.lower() == approved.lower():
+        if name.lower() == approved.lower() or (party["tax_id"] in own and _words(name) == _words(approved)):
             sure = KNOWN_PARTY  # read exactly as a person approved it before for this GSTIN
         elif fuzz.ratio(name.lower(), approved.lower()) >= 60:
             party["name"] = approved

@@ -446,6 +446,61 @@ def test_a_pdf_whose_text_hides_the_digits_is_read_as_a_picture():
     assert [p.method for p in load_pages("fine.pdf", _to_pdf(_colon_layout))] == ["digital"]
 
 
+def test_a_small_photo_of_a_boxed_header():
+    """A WhatsApp-sized photo of a Tally header: 'Invoice No.' read as 'voice No.', the address and the
+    number below it read as one cell, the 'Dated' label lost. The number is the part under the label and
+    the date the first one at the top of the page."""
+    from invoice_parser.extract import extract_invoice
+    from invoice_parser.layout import Cell, Line
+    from invoice_parser.matcher import LabelMatcher
+
+    def line(i, y, *cells):
+        return Line(i, 0, "  ".join(c.text for c in cells), y, y + 0.012, 0.9,
+                    cell_boxes=list(cells))
+
+    def cell(*words):  # (text, x0, x1) of each word
+        return Cell(" ".join(w[0] for w in words), words[0][1], words[-1][2], list(words))
+
+    lines = [
+        line(0, 0.03, cell(("Tax", 0.40, 0.44), ("Invoice", 0.45, 0.52))),
+        line(1, 0.07, cell(("OAKWOOD", 0.07, 0.15), ("JOINERY", 0.16, 0.24)),
+             cell(("voice", 0.503, 0.542), ("No.", 0.551, 0.576))),
+        line(2, 0.08, cell(("Plot", 0.07, 0.10), ("no", 0.11, 0.13), ("S-28,", 0.14, 0.18), ("Estate", 0.39, 0.44),
+                           ("no", 0.449, 0.462), ("1", 0.474, 0.481), ("OJ/2026-27/014", 0.499, 0.633)),
+             cell(("2-Sep-26", 0.699, 0.774))),
+        line(3, 0.10, cell(("Faridabad,", 0.07, 0.15), ("Haryana", 0.16, 0.22)),
+             cell(("Delivery", 0.48, 0.54), ("Note", 0.55, 0.59))),
+        line(4, 0.13, cell(("Dispatch", 0.48, 0.55), ("Doc", 0.56, 0.59)),
+             cell(("Delivery", 0.70, 0.76), ("Note", 0.77, 0.80), ("Date", 0.81, 0.84))),
+        line(5, 0.15, cell(("5-Sep-26", 0.70, 0.77))),
+    ]
+    fields = extract_invoice(lines, LabelMatcher(use_embeddings=False))["fields"]
+    assert fields["invoice_number"]["value"] == "OJ/2026-27/014"  # not 'S-28' or '1' of the address
+    assert fields["invoice_date"]["value"] == "2026-09-02"  # not the delivery note date below
+
+
+def test_a_misread_name_of_your_company_is_set_to_the_name_you_typed():
+    from invoice_parser.storage import known_party_names
+
+    class Store:
+        def approved_party_names(self, ids):
+            return {}
+
+        def own_companies(self):
+            return [{"name": "Kavya Infotech Pvt Ltd", "gstin": "06BKXPT4822Q3ZY"}]
+
+    def result(seller):
+        return {"fields": {"seller": {"value": {"name": seller, "tax_id": "06BKXPT4822Q3ZY"}, "confidence": 0.7},
+                           "buyer": None}, "warnings": []}
+
+    misread = result("Kavya lnfotecb Pvt Ltd")
+    known_party_names(misread, Store())
+    assert misread["fields"]["seller"]["value"]["name"] == "Kavya Infotech Pvt Ltd" and misread["warnings"]
+    printed = result("KAVYA INFOTECH PRIVATE LIMITED")  # the same name, other legal words: kept as printed
+    known_party_names(printed, Store())
+    assert printed["fields"]["seller"]["value"]["name"] == "KAVYA INFOTECH PRIVATE LIMITED" and not printed["warnings"]
+
+
 def test_a_real_mismatch_is_not_hidden(parser):
     """When nothing proves the right value (two digits differ), the amounts are left as read and the
     check fails, so a person looks at it."""
