@@ -38,6 +38,19 @@
       {% endfor %}
     </nav>
 
+    {% set own_names = own_company_names() %}
+    {% if own_names %}
+    <form class="side-view" method="post" action="{{ url_for('set_view_company') }}">
+      <label for="view-company">Books of</label>
+      <select id="view-company" name="company" data-autosubmit>
+        <option value="">All companies</option>
+        {% for c in own_names %}<option value="{{ c }}" {% if c == view_company %}selected{% endif %}>{{ c }}</option>{% endfor %}
+      </select>
+      <input type="hidden" name="next" value="{{ request.full_path }}">
+      <noscript><button type="submit">Show</button></noscript>
+    </form>
+    {% endif %}
+
     <div class="side-user">
       <span>Signed in as <strong>{{ current_user }}</strong></span>
       <form method="post" action="{{ url_for('logout') }}"><button type="submit">Log out</button></form>

@@ -33,8 +33,8 @@ from flask import (Flask, Response, abort, flash, jsonify, redirect, render_temp
 
 from invoice_parser import auth, config, fast_ocr, file_view
 from invoice_parser.companies import (ENTRY_TYPES, NO_COMPANY, clean_company, company_gstins,
-                                      file_without_company, folders, own_companies_text, parse_own_companies,
-                                      side_of, with_sides)
+                                      file_without_company, folders, names_company, own_companies_text,
+                                      parse_own_companies, side_of, side_seen_by, with_sides)
 from invoice_parser.settings import load_settings, save_settings
 from invoice_parser.exporting import build_xlsx, to_csv
 from invoice_parser.pipeline import get_parser
@@ -179,7 +179,24 @@ def inject_layout():
     return {"workspace": workspace(), "nav_stats": store().stats(), "endpoint": request.endpoint,
             "back_url": back_url(), "current_user": session.get("user"), "db_error": config.MONGODB_ERROR,
             "company_names": lambda: store().company_names(),  # called only by the pages that list them
+            "own_company_names": lambda: [f["name"] for f in store().own_companies()],
+            "view_company": _view_company(),
             "current_company": session.get("company", ""), "NO_COMPANY": NO_COMPANY}
+
+
+def _view_company():
+    """The company whose books the app shows (chosen in the sidebar), None: all companies."""
+    return session.get("view_company") or None
+
+
+@app.post("/view-company")
+def set_view_company():
+    """Show the app from one of your companies' side: its dashboard, and every bill as its sale or purchase."""
+    name = request.form.get("company") or None
+    session["view_company"] = name if name in [f["name"] for f in store().own_companies()] else None
+    target = request.form.get("next") or ""
+    target = re.sub(r"([?&])company=[^&]*&?", r"\1", target).rstrip("?&")  # the page follows the new choice
+    return redirect(target if target.startswith("/") and not target.startswith("//") else url_for("dashboard"))
 
 
 @app.template_global()
@@ -375,8 +392,9 @@ def _nice_max(value):
 def dashboard():
     """Debit (purchases) and credit (sales) by month and by company, GST, top suppliers and customers,
     for one currency, one period and all or one company."""
+    company = request.args.get("company", _view_company() or "")  # the books chosen in the sidebar, by default
     data = store().dashboard(currency=request.args.get("currency"), period=request.args.get("period", "12m"),
-                             company=request.args.get("company") or None)
+                             company=company or None)
     data["axis_max"] = _nice_max(max((max(b["debit"], b["credit"]) for b in data["buckets"]), default=0))
     data["vendor_max"] = max((v["total"] or 0 for v in data["vendors"]), default=0) or 1
     data["customer_max"] = max((v["total"] or 0 for v in data["customers"]), default=0) or 1
@@ -397,9 +415,14 @@ def invoice_detail(invoice_id):
         abort(404)
     if row["status"] != "done":
         return render_template("invoice_status.html", invoice=row)
-    gstin = (company_gstins(store().money_rows(company=row["company"]), store().own_companies()).get(row["company"])
-             if row["company"] else None)
+    own = store().own_companies()
+    gstin = company_gstins(store().money_rows(company=row["company"]), own).get(row["company"]) if row["company"] else None
     row["side"] = side_of(row, gstin)
+    viewed = _view_company()
+    if viewed and viewed != row["company"]:  # a bill from your other company: its side in the books shown
+        gstins = company_gstins(store().money_rows(company=viewed), own)
+        if names_company(row, viewed, gstins.get(viewed)):
+            row["viewed_side"] = side_seen_by(row, viewed, gstins)
     return _render_result(json.loads(row["result_json"]), invoice=row)
 
 

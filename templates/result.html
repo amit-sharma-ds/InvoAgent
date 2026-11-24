@@ -75,6 +75,11 @@
       <button class="btn secondary" type="submit">Save</button>
       {% if invoice.company %}<a class="small" href="{{ url_for('invoices', company=invoice.company) }}">Open folder</a>{% endif %}
     </form>
+    {% if invoice.viewed_side %}
+      <p class="small viewed-side">In the books of <strong>{{ view_company }}</strong> this bill is a
+        <strong>{{ 'Sale' if invoice.viewed_side == 'sale' else 'Purchase' }}</strong>{% if invoice.company %}
+        (it is kept in {{ invoice.company }}'s folder, where it is a {{ 'Sale' if invoice.side == 'sale' else 'Purchase' }}){% endif %}.</p>
+    {% endif %}
   {% endif %}
 
   <div class="actions">

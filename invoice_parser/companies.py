@@ -165,6 +165,21 @@ def side_of(row, gstin=None):
     return PURCHASE
 
 
+def names_company(row, company, gstin=None):
+    """Is the company the seller or the buyer on the invoice? By its GSTIN when known, else by name."""
+    if gstin:
+        return gstin in {_gstin(row.get("seller_tax_id")), _gstin(row.get("buyer_tax_id"))}
+    return names_match(company, row.get("seller_name")) or names_match(company, row.get("buyer_name"))
+
+
+def side_seen_by(row, company, gstins):
+    """The invoice's side in the books of `company` (None: in its own folder's books). A bill from one of
+    your companies to another is the seller's sale and, seen by the buyer, its purchase."""
+    if not company or row.get("company") == company:
+        return side_of(row, gstins.get(row.get("company")))
+    return side_of({**row, "company": company, "entry_type": None}, gstins.get(company))
+
+
 def with_sides(rows, money_rows, own=()):
     """Rows (exports, data sheet) with 'entry_type' set to the side the invoice counts on."""
     gstins = company_gstins(money_rows, own)
@@ -299,7 +314,9 @@ def build_dashboard(rows, currency=None, period="12m", today=None, company=None,
     if company == NO_COMPANY:
         rows = [r for r in rows if not r.get("company")]
     elif company in companies:
-        rows = [r for r in rows if r.get("company") == company]
+        # the company's books: its folder, and the bills in another folder (or none) that name its GSTIN,
+        # like a bill from your other company: a purchase here, a sale in the seller's books
+        rows = [r for r in rows if r.get("company") == company or names_company(r, company, gstins.get(company))]
     else:
         company = None
     base = {"companies": companies, "company": company, "has_unassigned": has_unassigned,
@@ -323,8 +340,11 @@ def build_dashboard(rows, currency=None, period="12m", today=None, company=None,
     mine = [r for r in rows if r.get("currency") == currency]
     undated = sum(1 for r in mine if not r.get("invoice_date"))
     dated = [r for r in mine if r.get("invoice_date") and start <= r["invoice_date"] <= end]
+    viewed = company if company and company != NO_COMPANY else None
     for r in dated:
-        r["side"] = side_of(r, gstins.get(r.get("company")))
+        r["side"] = side_seen_by(r, viewed, gstins)
+        if viewed:
+            r["company"] = viewed  # counted in the books shown
 
     width = 7 if month_keys is not None else 4
     buckets = {k: None for k in (month_keys or sorted({r["invoice_date"][:4] for r in dated}))}

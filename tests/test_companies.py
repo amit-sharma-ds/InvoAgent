@@ -168,6 +168,25 @@ def test_your_companies_decide_purchase_or_sale():
                                                                         ("OM TRADERS", 0, 0.0)]
 
 
+def test_the_books_of_one_of_your_companies():
+    """A bill from one of your companies to the other: a sale in the seller's books, a purchase in the
+    buyer's, once in the books of all companies."""
+    own = [{"name": "Kavya Infotech", "gstin": OWN}, {"name": "OM TRADERS", "gstin": SUPPLIER}]
+    between = _row(1, "Kavya Infotech", "Kavya Infotech Pvt Ltd", OWN, "OM TRADERS", SUPPLIER, 1180.0, 180.0)
+    bought = _row(2, "OM TRADERS", "Ganesha Softech", CUSTOMER, "OM Traders", SUPPLIER, 590.0, 90.0)
+    rows = [between, bought]
+
+    def books(company):
+        s = build_dashboard([dict(r) for r in rows], period="all", company=company, own=own)["summary"]
+        return s["credit"], s["debit"], s["invoices"]
+
+    assert books("Kavya Infotech") == (1180.0, 0.0, 1)
+    assert books("OM TRADERS") == (0.0, 1770.0, 2)
+    assert books(None) == (1180.0, 590.0, 2)
+    om = build_dashboard([dict(r) for r in rows], period="all", company="OM TRADERS", own=own)
+    assert [(c["name"], c["debit"]) for c in om["company_rows"]] == [("OM TRADERS", 1770.0)]
+
+
 def test_invoices_without_a_currency_are_counted_as_missing_not_hidden():
     rows = ROWS + [_row(6, "JP", "OM TRADERS", SUPPLIER, "JP Enterprises", OWN, 999.0, 0.0, currency=None)]
     d = build_dashboard([dict(r) for r in rows], period="all", today=date(2026, 11, 18))
