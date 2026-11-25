@@ -170,19 +170,34 @@ def test_a_second_look_keeps_the_surer_reading_of_a_line():
     assert fast_ocr.reread_lines(lines, [0]) is None  # a line is read again only once
 
 
+@needs_fast_ocr
+def test_on_a_page_that_reads_well_only_lines_with_a_doubtful_letter_are_read_again():
+    from rapidocr.ch_ppocr_rec.typings import WordInfo
+
+    lines = _page_lines([("Skirting boards", "Skirtng boards", 0.93),
+                         ("Fit 3 kitchen cupboards", "Fit 3 kitchen cupbards", 0.95)])
+    lines.sure = 1.0  # every line of the page read at 0.9+
+    lines.read = [("Skirtng boards", 0.93, WordInfo(confs=[0.99] * 5 + [0.45] + [0.99] * 8)),  # 'n' doubtful
+                  ("Fit 3 kitchen cupbards", 0.95, WordInfo(confs=[0.8] * 22))]  # no letter below 0.6
+    fast_ocr.reread_lines(lines, [0, 1])
+    assert lines.read[0][0] == "Skirting boards"
+    assert lines.read[1][0] == "Fit 3 kitchen cupbards" and 1 not in lines.hand_read
+
+
 def test_the_second_look_reads_the_item_and_party_lines(monkeypatch):
     from invoice_parser import pipeline
     from invoice_parser.models import Page
 
-    lines = fast_ocr.PageLines(0, (800, 600), None, [None] * 5, [
-        ("OAKWOOD JOINERY LTD", 1.0, None), ("To: Mr K. Verma", 0.9, None), ("Skirting boards", 0.9, None),
-        ("95.00", 0.9, None), ("Thank you", 0.9, None)], set())
+    lines = fast_ocr.PageLines(0, (800, 600), None, [None] * 6, [
+        ("OAKWOOD JOINERY LTD", 1.0, None), ("To: Mr K. Verma", 0.9, None), ("Plot 12, Sector 5, Gurugram", 0.9, None),
+        ("Skirting boards", 0.9, None), ("95.00", 0.9, None), ("Thank you", 0.9, None)], set())
     asked = []
     monkeypatch.setattr(fast_ocr, "reread_lines", lambda page_lines, indexes: asked.append(indexes))
     result = {"line_items": [{"description": "Skirting boards"}],
-              "fields": {"buyer": {"value": {"name": "Mr K. Verma"}}, "seller": None}}
+              "fields": {"buyer": {"value": {"name": "Mr K. Verma", "address": "Plot 12, Sector 5, Gurugram"}},
+                         "seller": None}}
     assert pipeline._second_look([Page(0, [], "ocr", 0.9, lines)], result) is False
-    assert asked == [[1, 2]]
+    assert asked == [[1, 3, 2]]  # the buyer's address line too, after the item and name lines
 
 
 def test_pictures_from_the_apps_own_camera_page_count_as_photos():

@@ -219,21 +219,36 @@ SECOND_LOOK_LINES = 16    # ... at most this many per page ...
 # ... on pages with some doubtful lines. Printed photos read 99-100% of their lines at 0.9+ (no second
 # look, no extra time); a printed form filled in by hand read 83-97% (photo variants of one such bill).
 SECOND_LOOK_PAGE_BELOW = 0.98
+# On a page that reads well as a whole, a line is still read again when one of its letters was read
+# below this: a WhatsApp copy of a printed form with two handwritten words read 100% of its lines at 0.9+,
+# while 'internal' came back as 'intermal' (its 'n' at 0.55) and 'fitting' as 'fiing' (an 'i' at 0.47).
+WEAK_LETTER = 0.6
+
+
+def _weakest_letter(text, info):
+    """The lowest confidence of a letter of a read line (1.0 when the letters' confidences are not known)."""
+    sure = getattr(info, "confs", None) or ()
+    if len(sure) != len(text):
+        return 1.0
+    return min((p for ch, p in zip(text, sure) if ch.isalpha()), default=1.0)
 
 
 def reread_lines(lines, indexes):
     """A second look at chosen lines of a read page (the item and party lines the extraction used) with
     the handwriting model. A page that reads well as a whole (a printed form with a few words written
     in) is not read again line by line, and the small model can misread those words: a handwritten
-    'fitting' came back as 'fiing', 'internal' as 'intermal' (the larger model read both right). The
-    larger model's reading is kept only when it is surer and changes no number. Returns the page's
-    words when a line changed, otherwise None."""
-    if lines.sure >= SECOND_LOOK_PAGE_BELOW:
-        return None
+    'fitting' came back as 'fiing', 'internal' as 'intermal' (the larger model read both right). On such
+    a page only the lines with a doubtful letter (WEAK_LETTER) are read again. The larger model's reading
+    is kept only when it is surer and changes no number. Returns the page's words when a line changed,
+    otherwise None."""
+    def doubtful(k):
+        text, score, info = lines.read[k]
+        return score < SECOND_LOOK_BELOW and (lines.sure < SECOND_LOOK_PAGE_BELOW
+                                              or _weakest_letter(text, info) < WEAK_LETTER)
+
     hand = _hand_reader()
     todo = [k for k in dict.fromkeys(indexes)
-            if 0 <= k < len(lines.read) and k not in lines.hand_read
-            and lines.read[k][1] < SECOND_LOOK_BELOW][:SECOND_LOOK_LINES]
+            if 0 <= k < len(lines.read) and k not in lines.hand_read and doubtful(k)][:SECOND_LOOK_LINES]
     if hand is None or not todo:
         return None
     with _run_lock:
@@ -772,16 +787,23 @@ def _with_gaps(text, score, info):
             if cols[j] - cols[j - 1] >= max(SPLIT_GAP_MIN, SPLIT_GAP_TIMES * usual)}
     if not cuts:
         return text, score, info
-    out, j = [], 0  # the text with a space before every cut that has none yet
-    for ch in text:
-        if ch.isspace():
-            out.append(ch)
-            continue
-        if j in cuts and out and not out[-1].isspace():
-            out.append(" ")
+    # the text with a space before every cut that has none yet; the letters' confidences (info.confs,
+    # one per character of the text) keep in step, a space put in counting as sure
+    letters = list(getattr(info, "confs", None) or [])
+    if len(letters) != len(text):
+        letters = None
+    out, sure, j = [], [], 0
+    for i, ch in enumerate(text):
+        if not ch.isspace():
+            if j in cuts and out and not out[-1].isspace():
+                out.append(" ")
+                sure.append(1.0)
+            j += 1
         out.append(ch)
-        j += 1
+        sure.append(letters[i] if letters else 1.0)
     new_text = "".join(out)
+    if letters:
+        info.confs = sure
     words, word_cols, k = [], [], 0
     for token in new_text.split():
         words.append(list(token))

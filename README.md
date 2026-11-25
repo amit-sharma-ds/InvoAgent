@@ -633,7 +633,8 @@ the circled quantity '①' as 1). Then:
 | GSTIN written with an `x` or a round letter read as `0` (`06BKxPT4822032Y`) | Repaired with the GSTIN check digit: 06BKXPT4822Q3ZY |
 | Words written without a space (`SURESHMITTAL`) | Split where the gap between letters is wide |
 | Words written with wide spaces beside a label: `To: Mr  K.  Verma` | One name, `Mr K. Verma` (not `Mr`) |
-| A mostly printed form with a few words written in (`fitting` read as `fiing`) | The item and party lines the fields came from are read again by the larger model, which wins when surer (no extra time on printed pages) |
+| A mostly printed form with a few words written in (`fitting` read as `fiing`) | The item, party name and party address lines the fields came from are read again by the larger model, which wins when surer. On a page that reads well as a whole only the item and name lines with a doubtful letter (below 0.6) are (a WhatsApp copy of such a form read every line at 0.9+ but `internal` as `intermal`); about 0-1 s more on a printed photo |
+| A misread common word in a party's name or address: `Lovistics`, `L+d`, `maombai`, `m umbai`, `Naggr`, `Bulding`, `Plot Ho.12`, `Andheri(e)` | Set to the common spelling (Logistics, Ltd, Mumbai, Nagar, Building, Plot No. 12, Andheri (E)) when the reader doubted a letter of it (below 0.9) and exactly one common word is that close in look-alike letters; listed in a warning. Names get only business words (Pvt, Ltd, Traders, Logistics ...), addresses also places (Mumbai, Andheri, Nagar ...). Text from a PDF's text layer is never changed |
 | A grand total in whole rupees within a rupee of subtotal + tax | Round-off, not a misread |
 | The form's printed border on a scan | Not taken for the page edge, so the header (seller, GSTIN) is kept |
 

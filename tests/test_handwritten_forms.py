@@ -124,10 +124,12 @@ def test_words_written_without_a_space_are_split_at_the_gap():
 
     from invoice_parser import fast_ocr
 
+    sure = [0.9, 0.8, 0.9, 0.9, 0.9, 0.7, 0.9, 0.6, 0.9, 0.9, 0.9, 0.9]  # each letter's confidence
     info = WordInfo(words=[list("SURESHMITTAL")], word_cols=[[3, 5, 8, 11, 14, 16, 21, 24, 27, 29, 33, 35]],
-                    word_types=[WordType.EN_NUM])
+                    word_types=[WordType.EN_NUM], confs=list(sure))
     text, _, info = fast_ocr._with_gaps("SURESHMITTAL", 0.97, info)
     assert text == "SURESH MITTAL" and info.words == [list("SURESH"), list("MITTAL")]
+    assert info.confs == sure[:6] + [1.0] + sure[6:]  # still one per character (spelling.py reads them)
     printed = WordInfo(words=[list("SunElectricals")], word_cols=[[2, 4, 9, 12, 14, 16, 18, 20, 22, 24, 26, 28, 30, 32]],
                        word_types=[WordType.EN_NUM])
     assert fast_ocr._with_gaps("SunElectricals", 0.99, printed)[0] == "SunElectricals"  # printed: kept
