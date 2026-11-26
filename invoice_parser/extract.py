@@ -50,6 +50,9 @@ ITEM_STOP = ("total", "sub total", "subtotal", "grand total", "amount in words",
              "amount payable", "terms", "notes", "bank", "thank", "signature", "tax", "igst", "cgst",
              "sgst", "gst", "vat", "discount", "round off", "declaration", "payment", "summary",
              "shipping", "freight")
+# where a table breaks over pages: 'continued ...' (Tally), 'Contd.', 'Carried forward', 'B/F'
+_CONTINUED_RE = re.compile(r"(?i)^\s*(continued|contd\b|cont'd|carried\s+(forward|over)|brought\s+forward|"
+                           r"[cb]\s*/\s*f\b)")
 _NO_NUMBER_RE = re.compile(r"no\.\s*(\d[\d\-/]{2,})", re.I)  # 'No.02857' under the INVOICE title
 _HASH_NUMBER_RE = re.compile(r"(?:no\.?\s*)?#\s*:?\s*([A-Za-z0-9][A-Za-z0-9\-/.]{0,24})", re.I)
 TOTAL_FIELDS = {"subtotal", "tax", "total", "discount", "shipping"}
@@ -398,10 +401,11 @@ def _amount_same_row(c, lines, label_lines=frozenset()):
 
 def _part_under(cell, label_cell):
     """A cell that reaches in from the column on the left ('... Estate no 1 TSY/2026-27/014': an address
-    and the number below 'Invoice No.' read as one cell in a small photo): only its words under the label."""
+    and the number below 'Invoice No.' read as one cell in a small photo): only its words under the label.
+    A word that ends before the label starts is the address's ('... Phase no 2' just left of the number)."""
     if cell.x0 >= label_cell.x0 - 0.05 or not cell.words:
         return cell.text
-    return " ".join(t for t, x0, x1 in cell.words if (x0 + x1) / 2 >= label_cell.x0 - 0.02)
+    return " ".join(t for t, x0, x1 in cell.words if (x0 + x1) / 2 >= label_cell.x0 - 0.02 and x1 > label_cell.x0)
 
 
 def _values_below(lines, c, label_cells, max_lines=4):
@@ -1125,10 +1129,14 @@ def _column_number(text, role):
         value = nz.parse_amount(f"{m.group(1)}.{m.group(2)}") if m else None
     if value is None:
         value = _cell_number(re.sub(r"\s*(/-|[-=/~]+)$", "", t))
+    if value is None:  # the 'per' unit read into the rate: '406.78NOS'
+        value = _cell_number(_UNIT_AFTER_FIGURE_RE.sub("", t))
     return value if value is not None else _lookalike_amount(t)
 
 
-_UNIT_WORD_RE = re.compile(r"(?i)^(nos?|pcs?|pieces?|kgs?|gms?|set|sets|each|box|mtrs?|ltrs?|units?|pairs?)\.?$")
+_UNIT_WORDS = r"(nos?|pcs?|pieces?|kgs?|gms?|set|sets|each|box|mtrs?|ltrs?|units?|pairs?)\.?"
+_UNIT_WORD_RE = re.compile(rf"(?i)^{_UNIT_WORDS}$")
+_UNIT_AFTER_FIGURE_RE = re.compile(rf"(?i)(?<=\d)\s*{_UNIT_WORDS}$")
 
 
 def _column_of(span, columns):
@@ -1140,19 +1148,52 @@ def _column_of(span, columns):
     return min(columns, key=lambda col: max(0.0, col[1].x0 - span.x1, span.x0 - col[1].x1))[0]
 
 
+_SERIAL_RE = re.compile(r"^\(?[\d①-⑨⓪]{1,3}[.)|>]?$")
+
+
+def _description_gap(columns):
+    """The stretch between the description title and the title on its left (S.No.): a description is
+    printed from the left edge of its column, well left of its centred title."""
+    desc = next((span for role, span in columns if role == "description"), None)
+    if desc is None:
+        return None
+    left = [span.x1 for role, span in columns if span.x1 <= desc.x0]
+    return (max(left) if left else None), desc
+
+
 def _split_cell(cell, columns):
     """(role, text) parts of a row's cell. Handwriting written close together runs across columns
-    ('8414 7nes 1986.0 13902.1' under HSN | QTY | RATE | AMOUNT): its words go each under their own column."""
+    ('8414 7nes 1986.0 13902.1' under HSN | QTY | RATE | AMOUNT): its words go each under their own column.
+    A word under no title is the description's when it sits between the S.No. title and the description
+    title ('(4GB', 'SSD128' of 'SSD128 GB'; a lone serial number written there stays a serial number), or
+    when it follows a description word closely and stops short of the column on its right ('120MM' of
+    '... Cooling Fan 120MM', not the quantity)."""
     words = getattr(cell, "words", None) or [(cell.text, cell.x0, cell.x1)]
     has_desc = any(r == "description" for r, _ in columns)
-    roles = []
-    for w in words:
-        role = _column_of(_Span(*w), columns)
+    gap = _description_gap(columns)
+    roles, serials = [], []
+    for k, w in enumerate(words):
+        span = _Span(*w)
+        role = _column_of(span, columns)
         # a word of the description written beyond its column ('Royal' under S.No., 'doors' under Amount)
         if (has_desc and role != "description" and re.search(r"[A-Za-z]{2,}", w[0])
                 and not re.search(r"\d", w[0]) and not _UNIT_WORD_RE.match(w[0])):
             role = "description"
+        elif gap and role != "description" and all(_overlap(col, span) <= 0 for _, col in columns):
+            left, desc = gap
+            if left is not None and left < span.x0 and span.x1 <= desc.x0:
+                if _SERIAL_RE.match(w[0]):
+                    serials.append(k)  # the description's only if the cell holds description words too
+                else:
+                    role = "description"
+            elif (span.x0 >= desc.x1 and k and roles[-1] == "description" and span.x0 - words[k - 1][2] <= 0.015
+                  and re.search(r"[A-Za-z]", w[0]) and not _UNIT_WORD_RE.match(w[0])
+                  and all(col.x0 > span.x1 for _, col in columns if col.x0 >= desc.x1)):
+                role = "description"
         roles.append(role)
+    if serials and "description" in roles:
+        for k in serials:
+            roles[k] = "description"
     if len(set(roles)) < 2:
         return [(roles[0], cell.text)]
     parts = []
@@ -1191,10 +1232,27 @@ def _line_items(lines, stop_lines):
                 items.append(row)
         return items, True
 
+    # a table that goes on over the page: each later page prints the invoice's head again (parties,
+    # GSTINs, invoice no.) above the repeated column titles; those lines are not rows, and their
+    # 'GSTIN' or 'Date' must not end the table
+    header_at = {}
+    for k in range(first, len(lines)):
+        if lines[k].page != head.page and lines[k].page not in header_at and is_table_header(lines[k]):
+            header_at[lines[k].page] = k
     items, rows = [], []
-    for ln in lines[first:]:
+    k, page = first, head.page
+    while k < len(lines):
+        ln = lines[k]
+        k += 1
+        if ln.page != page:
+            page = ln.page
+            if header_at.get(page, -1) >= k:
+                k = header_at[page]
+                continue
         if ln.index in stop_lines or _starts_with_any(ln.text, ITEM_STOP):
             break
+        if _CONTINUED_RE.match(ln.text):
+            continue  # 'continued ...' at the foot of a page, 'Brought forward' at the top of the next
         if is_table_header(ln):  # header repeated on a new page
             rows.append(("header", ln))
             continue
@@ -1227,7 +1285,12 @@ def _line_items(lines, stop_lines):
         if (amount is not None and amount == int(amount) and row["paise"] is not None
                 and row["paise"] == int(row["paise"]) and 0 <= row["paise"] < 100):
             amount += row["paise"] / 100  # '42288 | 14' under 'Rs. | P.'
-        desc = re.sub(r"^[\d①-⑨]{1,3}\s*[|.)>]?\s+(?=\D)", "", " ".join(row["description"])).strip(" -|") or None
+        text = " ".join(row["description"]).strip(" -|")
+        desc = re.sub(r"^[\d①-⑨]{1,3}\s*[|.)>]?\s+(?=\D)", "", text).strip(" -|") or None  # without its S.No.
+        if (amount is not None and desc is None and not pending and len(items) >= 2
+                and row["quantity"] is None and row["unit_price"] is None
+                and abs(sum(i["amount"] for i in items) - amount) <= 0.01):
+            break  # the items' sum printed under them without a label (Tally): the taxable value, not an item
         if amount is not None and desc is None and pending:
             # the amount written lower than its row ('Carrier 1.5TN | 28389.83' then '28389.83')
             desc = pending["description"]
@@ -1253,8 +1316,9 @@ def _line_items(lines, stop_lines):
             pending = {"description": desc, "quantity": row["quantity"], "unit_price": row["unit_price"]}
         elif (desc and items and row["quantity"] is None and row["unit_price"] is None
               and (last is None or ln.page != last.page or ln.y0 - last.y1 < 2 * (last.y1 - last.y0))):
-            # a wrapped line, right below its row (not a stamp or note further down)
-            items[-1]["description"] = f"{items[-1]['description'] or ''} {desc}".strip()
+            # a wrapped line, right below its row (not a stamp or note further down); a figure starting
+            # it is part of the text ('1 YEAR' under 'Cpu'), not a serial number
+            items[-1]["description"] = f"{items[-1]['description'] or ''} {text}".strip()
         if amount is not None or desc:
             last = ln
     return items, True
@@ -1676,7 +1740,14 @@ def extract_invoice(lines, matcher):
     if fields["subtotal"] is None and total is not None and tax is not None:
         derived = round(total - tax - (_amount_of(fields, "shipping") or 0) + (_amount_of(fields, "discount") or 0), 2)
         confidence = round(0.9 * min(fields["total"]["confidence"], fields["tax"]["confidence"]), 3)
-        if items and abs(sum(i["amount"] or 0 for i in items) - derived) <= 1.0:  # only rounding may differ
+        item_sum = round(sum(i["amount"] or 0 for i in items), 2)
+        if len(items) >= 2 and item_sum != derived and abs(item_sum - derived) <= 1.0 and item_sum in figures:
+            # the items' sum printed under them without a label (Tally), the total rounded off: the
+            # taxable value is that sum, not total - tax (which holds the round-off too)
+            fields["subtotal"] = {"value": item_sum, "confidence": confidence,
+                                  "source_label": "(sum of the line items, printed below them)", "source_text": "",
+                                  "page": None}
+        elif items and abs(item_sum - derived) <= 1.0:  # only rounding may differ
             # not printed (common on GST invoices), but total - tax equals the line items exactly
             fields["subtotal"] = {"value": derived, "confidence": confidence,
                                   "source_label": "(total - tax, matches line items)", "source_text": "", "page": None}

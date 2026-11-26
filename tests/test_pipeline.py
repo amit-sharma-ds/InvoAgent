@@ -479,6 +479,79 @@ def test_a_small_photo_of_a_boxed_header():
     assert fields["invoice_date"]["value"] == "2026-09-02"  # not the delivery note date below
 
 
+def test_an_invoice_over_two_pages():
+    """A Tally invoice read as a picture whose item table goes on over the page: page 1 ends in
+    'continued ...', page 2 prints the head (parties, GSTINs, invoice no.) again above the column titles.
+    All the items are read, the head of page 2 is not part of the last item of page 1, and the sum
+    printed under the items without a label is the taxable value, not one more item."""
+    from invoice_parser.extract import extract_invoice
+    from invoice_parser.layout import Cell, Line
+
+    def cell(*words):  # (text, x0, x1) of each word
+        return Cell(" ".join(w[0] for w in words), words[0][1], words[-1][2], list(words))
+
+    def head():  # the top of each page: our name, 'Invoice No.' and 'Dated', the address
+        return [  # the address and the number below 'Invoice No.' read as one cell
+            [cell(("Kavya", 0.06, 0.11), ("Infotech", 0.12, 0.20)), cell(("Invoice", 0.46, 0.51), ("No.", 0.515, 0.54)),
+             cell(("Dated", 0.66, 0.70))],
+            [cell(("Shop", 0.07, 0.10), ("7,", 0.105, 0.12), ("Green", 0.125, 0.16), ("Phase", 0.373, 0.418),
+                  ("no", 0.421, 0.439), ("2", 0.443, 0.451), ("OJ/2026-27/031", 0.464, 0.587)),
+             cell(("2-Nov-26", 0.657, 0.728))],
+            [cell(("GSTIN/UIN:", 0.07, 0.15), ("06BKXPT4822Q3ZY", 0.155, 0.30))],
+            [cell(("Supplier", 0.07, 0.12), ("(Bill", 0.125, 0.15), ("from)", 0.155, 0.19))],
+            [cell(("OAKWOOD", 0.07, 0.13), ("JOINERY", 0.135, 0.19))],
+            [cell(("GSTIN/UIN", 0.07, 0.15)), cell((":09AGHPR3344C1ZG", 0.19, 0.36))],
+            [cell(("SI", 0.066, 0.083)), cell(("Description", 0.209, 0.285), ("of", 0.289, 0.303), ("Goods", 0.308, 0.352)),
+             cell(("Quantity", 0.498, 0.551)), cell(("Rate", 0.588, 0.621)),
+             cell(("per", 0.648, 0.676), ("Disc.%", 0.68, 0.727)), cell(("Amount", 0.764, 0.82))],
+        ]
+
+    pages = [
+        [[cell(("INVOICE", 0.40, 0.49))]] + head() + [
+            [cell(("1", 0.071, 0.083), ("RAM", 0.089, 0.127), ("8GB", 0.13, 0.164)),
+             cell(("10", 0.501, 0.52), ("PCS", 0.524, 0.556)), cell(("1,500.00", 0.593, 0.64), ("PCS", 0.646, 0.673)),
+             cell(("15,000.00", 0.778, 0.845))],
+            [cell(("(8GB", 0.104, 0.144), ("DDR4)", 0.149, 0.20))],  # under neither title: the description's
+            [cell(("2", 0.067, 0.085), ("Power", 0.092, 0.14), ("Supply", 0.145, 0.19), ("Fan", 0.36, 0.40),
+                  ("120MM", 0.406, 0.46)),  # '120MM' nearer the quantity title, but part of the description
+             cell(("10", 0.502, 0.519), ("PCS", 0.524, 0.556)), cell(("1,200.00PCS", 0.577, 0.673)),
+             cell(("12,000.00", 0.771, 0.841))],
+            [cell(("1", 0.106, 0.117), ("YEAR", 0.118, 0.159))],
+            [cell(("continued", 0.73, 0.80), ("...", 0.805, 0.82))],
+        ],
+        [[cell(("INVOICE(Page", 0.36, 0.50), ("2)", 0.505, 0.54))]] + head() + [
+            [cell(("3", 0.07, 0.08), ("SSD128", 0.091, 0.151), ("GB", 0.159, 0.177)),
+             cell(("5", 0.505, 0.517), ("NOS", 0.527, 0.559), ("3,999.95", 0.577, 0.64), ("NOS", 0.648, 0.675)),
+             cell(("19,999.75", 0.771, 0.841))],
+            [cell(("46,999.75", 0.76, 0.84))],  # the items' sum, no label
+            [cell(("IGST", 0.35, 0.39), ("18%", 0.40, 0.44)), cell(("8,459.96", 0.77, 0.84))],
+            [cell(("ROUNDED", 0.36, 0.42), ("OFF", 0.425, 0.45)), cell(("0.29", 0.81, 0.84))],
+            [cell(("Total", 0.45, 0.48)), cell(("55,460.00", 0.74, 0.84))],
+            [cell(("Amount", 0.06, 0.11), ("Chargeable", 0.115, 0.19), ("(in", 0.195, 0.21), ("words)", 0.215, 0.25))],
+            [cell(("INR", 0.07, 0.10), ("Fifty", 0.105, 0.14), ("Five", 0.145, 0.17), ("Thousand", 0.175, 0.24),
+                  ("Four", 0.245, 0.28), ("Hundred", 0.285, 0.34), ("Sixty", 0.345, 0.38), ("Only", 0.385, 0.42))],
+        ],
+    ]
+    lines = []
+    for page, rows in enumerate(pages):
+        for k, cells in enumerate(rows):
+            y = 0.02 + 0.03 * k
+            lines.append(Line(len(lines), page, "  ".join(c.text for c in cells), y, y + 0.016, 0.95,
+                              cell_boxes=cells))
+    result = extract_invoice(lines, LabelMatcher(use_embeddings=False))
+    fields = {k: (v or {}).get("value") for k, v in result["fields"].items()}
+    assert fields["invoice_number"] == "OJ/2026-27/031"  # not the '2' ending the address on its left
+    assert fields["invoice_date"] == "2026-11-02"
+    assert [(i["description"], i["quantity"], i["unit_price"], i["amount"]) for i in result["line_items"]] == [
+        ("RAM 8GB (8GB DDR4)", 10, 1500.0, 15000.0),
+        ("Power Supply Fan 120MM 1 YEAR", 10, 1200.0, 12000.0),  # the rate with its unit: '1,200.00PCS'
+        ("SSD128 GB", 5, 3999.95, 19999.75),
+    ]
+    # the taxable value is the items' sum printed below them, not total - tax (which holds the round-off)
+    assert (fields["subtotal"], fields["tax"], fields["total"]) == (46999.75, 8459.96, 55460.0)
+    assert result["checks"]["line_items_sum_equals_subtotal"] is True
+
+
 def test_a_misread_name_of_your_company_is_set_to_the_name_you_typed():
     from invoice_parser.storage import known_party_names
 

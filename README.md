@@ -610,6 +610,9 @@ Real invoices often leave out the labels a parser would look for. These cases ar
 | `Total  1 NOS  2,95,000.00` (Tally prints the total quantity in the Total row) | A number with a unit (`NOS`, `pcs`, `kg` ...) is never taken as money; on a tilted photo the amount at the same height further right is used |
 | Total read wrongly, but the amount in words and a figure printed on the invoice agree | The total is corrected to that amount, with a warning |
 | No readable line items and no printed subtotal | Subtotal = total - tax, only when the total is confirmed by the amount in words and that subtotal is printed on the invoice |
+| Item table over two or more pages (`continued ...`, the head printed again on page 2) | The rows go on after the repeated column titles; the repeated head (parties, GSTINs) is skipped and does not end the table |
+| The items' sum printed under them without a label (Tally) | Not an item: it ends the table and is the subtotal (also when the total was rounded off) |
+| The end of the address (`... Phase no 2`) and the invoice number below `Invoice No.` read as one cell | Only the words under the label are the number |
 
 Tested on 200 invoices in the SuperStore layout (all fields 200/200) and 40 scan / phone-photo versions of them.
 
