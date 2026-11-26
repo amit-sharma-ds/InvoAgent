@@ -59,11 +59,12 @@ Every page has a **left sidebar** with one tab per job, so new features always g
 
 | Tab | What it is for |
 |---|---|
-| **Dashboard** (start page) | Counts of all invoices (need review, approved, rejected, possible duplicates, failed); total value, purchases (bills the company pays), sales (bills it raises), net, GST payable / to claim and companies at the top; purchases and sales by month, company-wise, top suppliers and customers; for all or one company, per currency, for the last 12 months, this / last financial year (Apr-Mar) or all years. Hover a bar for the numbers; "Show as a table" lists them; the recent invoices below |
+| **Dashboard** (start page) | Counts of all invoices (need review, approved, rejected, possible duplicates, failed); total value, purchases (bills the company pays), sales (bills it raises), net, GST payable / to claim and companies at the top; purchases and sales by month, company-wise, project-wise, top suppliers and customers; for all or one company, all or one project, per currency, for the last 12 months, this / last financial year (Apr-Mar) or all years. Hover a bar for the numbers; "Show as a table" lists them; the recent invoices below |
+| **Projects** (on the Dashboard) | A bill can be put in a project: on the Add invoices page (for the whole upload, offered again next time), on the invoice page, or for the bills selected in the Invoices list (**Set project**). One project can run in several of your companies. The Dashboard's **Project-wise** part shows each project's sales, purchases and **margin, all without GST** (GST is passed on or claimed back); a bill whose GST was not found counts with its whole total and the table says so. Choose a project at the top to see only its bills. With all companies shown, a bill from one of your companies to another is left out (the money stays inside the group; the page says how many), so a project's margin is the client's payment minus the outside suppliers' bills; each company's own books (Books of) still count it as the seller's sale and the buyer's purchase |
 | **Books of** (sidebar) | With your companies set: the company whose books the app shows. Its dashboard counts every bill it is on, so a bill from your other company is a purchase here and a sale in the seller's books; an invoice page says how the bill counts for it |
 | **Companies** | **Your companies** (typed once, with their GSTINs if wanted): a bill where one of them is the seller is a sale, where it is the buyer a purchase (a bill from one of them to another is the seller's sale), and every invoice goes into the folder of the company it names. One folder per company: invoices, purchases, sales, the company's own GSTIN (typed, or found from its invoices), and Open / Dashboard / View Excel / Files (ZIP) |
 | **Add invoices** | One place for everything: pick the company, then drop or choose PDFs, photos, a ZIP or a whole folder, take photos with the phone camera, or paste a copied picture (Ctrl+V, read straight away). The files are listed (thumbnail, size, remove) before they are sent with a progress bar; one invoice opens at once, more go to a background batch |
-| **Invoices** | Search and filter all invoices (status, review status, needs review), Excel / CSV export |
+| **Invoices** | Search and filter all invoices (company, project, status, review status, needs review), move the selected ones to a company or a project, Excel / CSV export |
 | **Review queue** | Only the invoices a person must check: low confidence, failed checks, missing fields or a possible duplicate |
 | **Data sheet** | Spreadsheet view of all invoices and line items, sort, filter, totals per currency, Excel / CSV |
 | **Vendors** | Every seller with GSTIN, invoice count, total billed and last invoice date |
@@ -292,7 +293,8 @@ discount, shipping, total, line_item_count, overall_confidence, needs_review, st
 Line items go in a separate table (and Excel sheet): `invoice_id, invoice_number, seller_name, line_no,
 description, quantity, unit_price, amount`.
 
-- **Search and filters:** invoice no, seller, buyer, GSTIN or file name; status; "needs review only"; batch.
+- **Search and filters:** invoice no, seller, buyer, GSTIN or file name; company; project; status; "needs review
+  only"; batch. The `company` and `project` columns are in the table and the exports.
 - **Needs review:** an invoice is flagged when overall confidence is below 0.8, a required field
   (number, date, seller, total) is missing, or the totals or line items do not add up. Flagged rows are highlighted.
 - **Exports, viewed first:** *View Excel / CSV* (Invoices page, a company folder, a finished batch) opens the
@@ -572,7 +574,7 @@ invoice_parser/
   schema.py                 canonical fields, synonyms, guard words
   extract.py                fields, party blocks, line items, cross-checks, GST checks
   normalize.py              amounts, amount in words, dates, GSTIN check digit + OCR repair, currency
-  companies.py              company folders, your companies, purchase / sale side, dashboard figures
+  companies.py              company folders, your companies, purchase / sale side, projects, dashboard figures
   file_view.py              the original file's pages as pictures for the View page (PDFs and photos)
   settings.py               settings changed in the app (scanner folder)
 templates/, static/         Plain HTML, CSS and JS pages

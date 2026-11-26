@@ -18,7 +18,7 @@ from pathlib import Path
 
 from . import config
 from . import normalize as nz
-from .companies import ENTRY_TYPES, MONEY_FIELDS, NO_COMPANY, build_dashboard, known_companies
+from .companies import ENTRY_TYPES, MONEY_FIELDS, NO_COMPANY, NO_PROJECT, build_dashboard, known_companies
 from .extract import REQUIRED_FIELDS, overall_confidence
 
 SCHEMA = """
@@ -76,7 +76,8 @@ CREATE TABLE IF NOT EXISTS invoices (
     duplicate_of INTEGER,                        -- earlier invoice with the same seller + number
     invoice_key TEXT,                            -- invoice number without spaces / punctuation
     company TEXT,                                -- the company (folder) the invoice belongs to
-    entry_type TEXT                              -- set by hand: purchase (debit) | sale (credit)
+    entry_type TEXT,                             -- set by hand: purchase (debit) | sale (credit)
+    project TEXT                                 -- the project the bill is for (set by a person)
 );
 CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);
 CREATE INDEX IF NOT EXISTS idx_invoices_number ON invoices(invoice_number);
@@ -105,17 +106,17 @@ CREATE TABLE IF NOT EXISTS app_settings (           -- settings kept with the in
 # Columns added after the first release: added automatically to older databases.
 _ADDED_COLUMNS = {"review_status": "TEXT DEFAULT 'pending'", "review_note": "TEXT", "reviewed_at": "TEXT",
                   "edited": "INTEGER DEFAULT 0", "duplicate_of": "INTEGER", "invoice_key": "TEXT",
-                  "shipping": "REAL", "company": "TEXT", "entry_type": "TEXT"}
+                  "shipping": "REAL", "company": "TEXT", "entry_type": "TEXT", "project": "TEXT"}
 
 # Columns shown in the table view (same set for every invoice; missing values are NULL).
 TABLE_COLUMNS = [
-    "id", "file_name", "company", "status", "needs_review", "review_status", "duplicate_of", "invoice_number",
+    "id", "file_name", "company", "project", "status", "needs_review", "review_status", "duplicate_of", "invoice_number",
     "invoice_date", "due_date", "po_number", "seller_name", "seller_tax_id", "buyer_name", "buyer_tax_id",
     "currency", "subtotal", "tax", "discount", "shipping", "total", "line_item_count", "overall_confidence",
 ]
 # Columns written to CSV / Excel exports.
 EXPORT_COLUMNS = [
-    "id", "file_name", "company", "entry_type", "status", "needs_review", "review_status", "review_note",
+    "id", "file_name", "company", "project", "entry_type", "status", "needs_review", "review_status", "review_note",
     "reviewed_at", "edited",
     "duplicate_of", "invoice_number", "invoice_date", "due_date", "po_number", "currency", "seller_name",
     "seller_address", "seller_tax_id", "seller_email", "seller_phone", "buyer_name", "buyer_address",
@@ -142,7 +143,7 @@ INVOICE_COLUMNS = [
     "buyer_address", "buyer_tax_id", "buyer_email", "buyer_phone", "subtotal", "tax", "discount", "shipping",
     "total", "totals_ok", "line_items_ok", "line_item_count", "needs_review", "warnings", "result_json",
     "created_at", "started_at", "processed_at", "review_status", "review_note", "reviewed_at", "edited",
-    "duplicate_of", "invoice_key", "company", "entry_type",
+    "duplicate_of", "invoice_key", "company", "entry_type", "project",
 ]
 
 
@@ -354,6 +355,7 @@ class InvoiceStore:
             con.executescript(SCHEMA)
             con.execute("CREATE INDEX IF NOT EXISTS idx_invoices_key ON invoices(invoice_key)")
             con.execute("CREATE INDEX IF NOT EXISTS idx_invoices_company ON invoices(company)")
+            con.execute("CREATE INDEX IF NOT EXISTS idx_invoices_project ON invoices(project)")
 
     @classmethod
     def for_workspace(cls, name):
@@ -381,11 +383,11 @@ class InvoiceStore:
             return con.execute("INSERT INTO batches(name, source, created_at) VALUES (?, ?, ?)",
                                (name, source, _now())).lastrowid
 
-    def add_file(self, file_name, data, batch_id=None, queue=True, company=None):
+    def add_file(self, file_name, data, batch_id=None, queue=True, company=None, project=None):
         """Store a file. Returns (invoice_id, is_new). A file whose content is already stored
         is not added again (is_new=False) but is still recorded as part of the batch (and put in
-        the company when it has none). queue=False keeps a new file out of the background queue
-        so the caller can process it right away."""
+        the company and the project when it has none). queue=False keeps a new file out of the
+        background queue so the caller can process it right away."""
         sha = hashlib.sha256(data).hexdigest()
         with self._db() as con:
             row = con.execute("SELECT id FROM invoices WHERE file_sha256 = ?", (sha,)).fetchone()
@@ -399,9 +401,9 @@ class InvoiceStore:
                 try:
                     invoice_id = con.execute(
                         "INSERT INTO invoices(batch_id, file_name, file_sha256, stored_path, status,"
-                        " created_at, started_at, company) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                        " created_at, started_at, company, project) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (batch_id, Path(file_name).name, sha, rel, "queued" if queue else "processing",
-                         _now(), None if queue else _now(), company or None)).lastrowid
+                         _now(), None if queue else _now(), company or None, project or None)).lastrowid
                 except sqlite3.IntegrityError:  # same file added at the same moment elsewhere
                     is_new = False
                     row = con.execute("SELECT id FROM invoices WHERE file_sha256 = ?", (sha,)).fetchone()
@@ -410,6 +412,9 @@ class InvoiceStore:
                 if company:
                     con.execute("UPDATE invoices SET company = ? WHERE id = ? AND company IS NULL",
                                 (company, invoice_id))
+                if project:
+                    con.execute("UPDATE invoices SET project = ? WHERE id = ? AND project IS NULL",
+                                (project, invoice_id))
             if batch_id:
                 con.execute("INSERT OR IGNORE INTO batch_members(batch_id, invoice_id) VALUES (?, ?)",
                             (batch_id, invoice_id))
@@ -487,14 +492,16 @@ class InvoiceStore:
 
     # --- reading -----------------------------------------------------------------------
     @staticmethod
-    def _where(q=None, status=None, review=None, batch_id=None, review_status=None, company=None, alias=""):
+    def _where(q=None, status=None, review=None, batch_id=None, review_status=None, company=None, project=None,
+               alias=""):
         p = f"{alias}." if alias else ""
         conds, args = [], []
-        if company == NO_COMPANY:
-            conds.append(f"{p}company IS NULL")
-        elif company:
-            conds.append(f"{p}company = ?")
-            args.append(company)
+        for column, value, none in (("company", company, NO_COMPANY), ("project", project, NO_PROJECT)):
+            if value == none:
+                conds.append(f"{p}{column} IS NULL")
+            elif value:
+                conds.append(f"{p}{column} = ?")
+                args.append(value)
         if review_status in REVIEW_STATUSES:
             conds.append(f"COALESCE({p}review_status, 'pending') = ?")
             args.append(review_status)
@@ -514,8 +521,8 @@ class InvoiceStore:
         return (" WHERE " + " AND ".join(conds)) if conds else "", args
 
     def search(self, q=None, status=None, review=None, batch_id=None, review_status=None, company=None,
-               limit=50, offset=0):
-        where, args = self._where(q, status, review, batch_id, review_status, company)
+               project=None, limit=50, offset=0):
+        where, args = self._where(q, status, review, batch_id, review_status, company, project)
         with self._db() as con:
             total = con.execute(f"SELECT COUNT(*) FROM invoices{where}", args).fetchone()[0]
             rows = con.execute(f"SELECT {', '.join(TABLE_COLUMNS)} FROM invoices{where}"
@@ -533,15 +540,16 @@ class InvoiceStore:
         out["line_items"] = [dict(i) for i in items]
         return out
 
-    def export_rows(self, q=None, status=None, review=None, batch_id=None, review_status=None, company=None):
-        where, args = self._where(q, status, review, batch_id, review_status, company)
+    def export_rows(self, q=None, status=None, review=None, batch_id=None, review_status=None, company=None,
+                    project=None):
+        where, args = self._where(q, status, review, batch_id, review_status, company, project)
         with self._db() as con:
             return [dict(r) for r in con.execute(
                 f"SELECT {', '.join(EXPORT_COLUMNS)} FROM invoices{where} ORDER BY id", args)]
 
     def export_line_items(self, q=None, status=None, review=None, batch_id=None, review_status=None,
-                          company=None):
-        where, args = self._where(q, status, review, batch_id, review_status, company, alias="i")
+                          company=None, project=None):
+        where, args = self._where(q, status, review, batch_id, review_status, company, project, alias="i")
         with self._db() as con:
             return [dict(r) for r in con.execute(
                 "SELECT li.invoice_id, i.invoice_number, i.seller_name, i.currency, li.line_no, li.description,"
@@ -669,10 +677,10 @@ class InvoiceStore:
     _COUNTED = ("status = 'done' AND COALESCE(review_status, 'pending') != 'rejected'"
                 " AND (duplicate_of IS NULL OR review_status = 'approved')")
 
-    def dashboard(self, currency=None, period="12m", today=None, company=None):
+    def dashboard(self, currency=None, period="12m", today=None, company=None, project=None):
         """Figures for the Dashboard tab (see companies.build_dashboard)."""
         return build_dashboard(self.money_rows(), currency, period, today, company, self.company_names(),
-                               self.own_companies())
+                               self.own_companies(), project)
 
     # --- companies (folders) ------------------------------------------------------------
     def money_rows(self, company=None):
@@ -717,6 +725,21 @@ class InvoiceStore:
             return con.execute(
                 f"UPDATE invoices SET company = ?, entry_type = ? WHERE id IN ({','.join('?' * len(ids))})",
                 [company or None, entry_type if entry_type in ENTRY_TYPES else None] + ids).rowcount
+
+    def set_project(self, invoice_ids, project):
+        """Put invoices in a project (None: in no project)."""
+        ids = [int(i) for i in invoice_ids]
+        if not ids:
+            return 0
+        with self._db() as con:
+            return con.execute(f"UPDATE invoices SET project = ? WHERE id IN ({','.join('?' * len(ids))})",
+                               [project or None] + ids).rowcount
+
+    def project_names(self):
+        """Every project some invoice is in."""
+        with self._db() as con:
+            return sorted((r[0] for r in con.execute("SELECT DISTINCT project FROM invoices WHERE project IS NOT NULL")),
+                          key=str.lower)
 
     def files_of(self, company):
         """The stored files of a company folder (NO_COMPANY: of the invoices without a company)."""

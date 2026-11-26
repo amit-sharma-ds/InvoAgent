@@ -30,7 +30,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import config
-from .companies import ENTRY_TYPES, MONEY_FIELDS, NO_COMPANY, build_dashboard, known_companies
+from .companies import ENTRY_TYPES, MONEY_FIELDS, NO_COMPANY, NO_PROJECT, build_dashboard, known_companies
 from .storage import (EXPORT_COLUMNS, INVOICE_COLUMNS, REVIEW_STATUSES, STATUSES, TABLE_COLUMNS, _minutes_ago,
                       _now, corrections, flatten, invoice_key)
 
@@ -132,7 +132,7 @@ class MongoInvoiceStore:
         self.invoices, self.batches, self.counters = self.db.invoices, self.db.batches, self.db.counters
         self.fs = gridfs.GridFSBucket(self.db, bucket_name="files")
         for field, unique in (("id", True), ("file_sha256", True), ("status", False), ("invoice_key", False),
-                              ("batch_ids", False), ("company", False)):
+                              ("batch_ids", False), ("company", False), ("project", False)):
             self.invoices.create_index(field, unique=unique)
         self.batches.create_index("id", unique=True)
         self._uploads = queue.Queue()
@@ -156,11 +156,11 @@ class MongoInvoiceStore:
         self.batches.insert_one({"id": batch_id, "name": name, "source": source, "created_at": _now()})
         return batch_id
 
-    def add_file(self, file_name, data, batch_id=None, queue=True, company=None):
+    def add_file(self, file_name, data, batch_id=None, queue=True, company=None, project=None):
         """Store a file. Returns (invoice_id, is_new). A file whose content is already stored is not
         added again (is_new=False) but is still recorded as part of the batch (and put in the company
-        when it has none). queue=False keeps a new file out of the background queue so the caller can
-        process it right away."""
+        and the project when it has none). queue=False keeps a new file out of the background queue so
+        the caller can process it right away."""
         from pymongo.errors import DuplicateKeyError
 
         sha = hashlib.sha256(data).hexdigest()
@@ -177,7 +177,7 @@ class MongoInvoiceStore:
                        file_sha256=sha, stored_path=rel, status="queued" if queue else "processing",
                        created_at=_now(), started_at=None if queue else _now(), review_status="pending",
                        edited=0, line_items=[], batch_ids=[batch_id] if batch_id else [], file_stored=False,
-                       company=company or None)
+                       company=company or None, project=project or None)
             try:
                 self.invoices.insert_one(doc)
             except DuplicateKeyError:  # the same file added at the same moment elsewhere
@@ -194,6 +194,8 @@ class MongoInvoiceStore:
             self.invoices.update_one({"id": existing["id"]}, {"$addToSet": {"batch_ids": batch_id}})
         if company:
             self.invoices.update_one({"id": existing["id"], "company": None}, {"$set": {"company": company}})
+        if project:
+            self.invoices.update_one({"id": existing["id"], "project": None}, {"$set": {"project": project}})
         return existing["id"], False
 
     def file_path(self, row) -> Path:
@@ -357,10 +359,12 @@ class MongoInvoiceStore:
 
     # --- reading -----------------------------------------------------------------------
     @staticmethod
-    def _match(q=None, status=None, review=None, batch_id=None, review_status=None, company=None):
+    def _match(q=None, status=None, review=None, batch_id=None, review_status=None, company=None, project=None):
         m = {}
         if company:
             m["company"] = None if company == NO_COMPANY else company
+        if project:  # None also finds the older invoices that have no project field at all
+            m["project"] = None if project == NO_PROJECT else project
         if review_status in REVIEW_STATUSES:
             m["review_status"] = {"$in": [None, "pending"]} if review_status == "pending" else review_status
         if q:
@@ -380,8 +384,8 @@ class MongoInvoiceStore:
         return {"_id": 0, **{c: 1 for c in columns}}
 
     def search(self, q=None, status=None, review=None, batch_id=None, review_status=None, company=None,
-               limit=50, offset=0):
-        m = self._match(q, status, review, batch_id, review_status, company)
+               project=None, limit=50, offset=0):
+        m = self._match(q, status, review, batch_id, review_status, company, project)
         total = self.invoices.count_documents(m)
         docs = self.invoices.find(m, self._projection(TABLE_COLUMNS)).sort("id", -1).skip(offset).limit(limit)
         return total, [self._row(d, TABLE_COLUMNS) for d in docs]
@@ -395,14 +399,15 @@ class MongoInvoiceStore:
                              for it in sorted(doc.get("line_items") or [], key=lambda it: it["line_no"])]
         return out
 
-    def export_rows(self, q=None, status=None, review=None, batch_id=None, review_status=None, company=None):
-        m = self._match(q, status, review, batch_id, review_status, company)
+    def export_rows(self, q=None, status=None, review=None, batch_id=None, review_status=None, company=None,
+                    project=None):
+        m = self._match(q, status, review, batch_id, review_status, company, project)
         return [self._row(d, EXPORT_COLUMNS)
                 for d in self.invoices.find(m, self._projection(EXPORT_COLUMNS)).sort("id", 1)]
 
     def export_line_items(self, q=None, status=None, review=None, batch_id=None, review_status=None,
-                          company=None):
-        m = self._match(q, status, review, batch_id, review_status, company)
+                          company=None, project=None):
+        m = self._match(q, status, review, batch_id, review_status, company, project)
         out = []
         fields = {"_id": 0, "id": 1, "invoice_number": 1, "seller_name": 1, "currency": 1, "line_items": 1}
         for d in self.invoices.find(m, fields).sort("id", 1):
@@ -520,10 +525,10 @@ class MongoInvoiceStore:
         return {**stats, "review": review, "duplicates": duplicates, "totals": _by_total_desc(totals),
                 "recent": recent_rows}
 
-    def dashboard(self, currency=None, period="12m", today=None, company=None):
+    def dashboard(self, currency=None, period="12m", today=None, company=None, project=None):
         """Figures for the Dashboard tab (see companies.build_dashboard)."""
         return build_dashboard(self.money_rows(), currency, period, today, company, self.company_names(),
-                               self.own_companies())
+                               self.own_companies(), project)
 
     # --- companies (folders) ------------------------------------------------------------
     def money_rows(self, company=None):
@@ -558,6 +563,17 @@ class MongoInvoiceStore:
             return 0
         return self.invoices.update_many({"id": {"$in": ids}}, {"$set": {
             "company": company or None, "entry_type": entry_type if entry_type in ENTRY_TYPES else None}}).matched_count
+
+    def set_project(self, invoice_ids, project):
+        """Put invoices in a project (None: in no project)."""
+        ids = [int(i) for i in invoice_ids]
+        if not ids:
+            return 0
+        return self.invoices.update_many({"id": {"$in": ids}}, {"$set": {"project": project or None}}).matched_count
+
+    def project_names(self):
+        """Every project some invoice is in."""
+        return sorted((p for p in self.invoices.distinct("project") if p), key=str.lower)
 
     def files_of(self, company):
         """The stored files of a company folder (NO_COMPANY: of the invoices without a company)."""

@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_company.html" import company_input with context %}
+{% from "_company.html" import company_input, project_input with context %}
 {% block content %}
 <section class="card">
   <h1>Add invoices</h1>
@@ -15,6 +15,11 @@
     <p class="muted small field-hint">The invoices are kept in this company's folder on the
       <a href="{{ url_for('companies') }}">Companies</a> page. Left empty, each invoice goes to the known company
       whose name or GSTIN it shows.</p>
+    <label class="company-field">Project
+      {{ project_input(current_project, id='upload-project') }}
+    </label>
+    <p class="muted small field-hint">Optional: the project these bills are for (purchases and sales). The
+      Dashboard shows each project's sales, purchases and margin. Left empty, the bills are in no project.</p>
 
     <div class="drop-zone" id="drop-zone">
       <svg class="drop-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M4 14v3.5A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5V14"/></svg>

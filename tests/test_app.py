@@ -471,6 +471,48 @@ def test_company_folders(client):
     assert store.get(first)["company"] is None and store.get(first)["entry_type"] is None
 
 
+def test_projects(client):
+    """Bills put in a project when uploading, on the invoice page and from the list; the dashboard shows
+    each project's sales, purchases and margin without GST."""
+    store = app_module.store()
+    resp = client.post("/upload", data={"files": (io.BytesIO(_to_pdf(_colon_layout) + b"%pr1"), "pr1.pdf"),
+                                        "project": " Racking   Line "}, content_type="multipart/form-data")
+    first = int(resp.headers["Location"].rstrip("/").rsplit("/", 1)[-1])
+    second = None
+    try:
+        assert store.get(first)["project"] == "Racking Line"
+        assert 'id="upload-project" value="Racking Line"' in client.get("/upload").data.decode("utf-8")
+        second = _upload(client, _to_pdf(_colon_layout) + b"%pr2", "pr2.pdf")  # the project offered is used
+        assert store.get(second)["project"] == "Racking Line"
+        assert 'id="invoice-project" value="Racking Line"' in client.get(f"/invoices/{first}").data.decode("utf-8")
+
+        shown = {"company": "", "side_shown": "purchase", "entry_type": "purchase"}
+        client.post(f"/invoices/{second}/company", data={**shown, "project": ""})
+        assert store.get(second)["project"] is None
+        client.post(f"/invoices/{second}/company", data={**shown, "project": "racking line"})
+        assert store.get(second)["project"] == "Racking Line"  # the known spelling, whatever the case
+        client.post("/invoices/project", data={"ids": [str(second)], "project": "Office"})
+        assert store.get(second)["project"] == "Office" and store.get(first)["project"] == "Racking Line"
+        listed = client.get("/invoices?project=Office").data.decode("utf-8")
+        assert f'name="ids" value="{second}"' in listed and f'name="ids" value="{first}"' not in listed
+
+        store.set_review(first, "approved")  # the sample is a possible duplicate of the earlier tests' copies
+        row = store.get(first)
+        d = store.dashboard(period="all", currency=row["currency"], project="Racking Line")
+        assert [(p["name"], p["purchases"]) for p in d["project_rows"]] == [
+            ("Racking Line", round(row["total"] - (row["tax"] or 0), 2))]
+        html = client.get(f"/dashboard?period=all&currency={row['currency']}&project=Racking+Line").data.decode("utf-8")
+        assert "Dashboard · Racking Line</h1>" in html and "Project-wise" in html and "Margin&nbsp;%" in html
+        assert "Project-wise" in client.get(f"/dashboard?period=all&currency={row['currency']}").data.decode("utf-8")
+
+        text = client.get("/export/invoices.csv?project=Office").data.decode("utf-8-sig")
+        assert [(r["id"], r["project"]) for r in csv.DictReader(io.StringIO(text))] == [(str(second), "Office")]
+        client.post("/invoices/project", data={"ids": [str(first), str(second)], "project": ""})
+        assert store.get(first)["project"] is None and store.get(second)["project"] is None
+    finally:
+        store.delete([i for i in (first, second) if i])
+
+
 def test_your_companies_make_their_bills_sales(client):
     """Your companies typed once: their sales bills count as sales without picking a folder."""
     store = app_module.store()

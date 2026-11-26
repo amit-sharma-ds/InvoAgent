@@ -11,7 +11,8 @@
 <section class="card">
   <div class="result-head">
     <div>
-      <h1>Dashboard{% if d.company == NO_COMPANY %} · No company{% elif d.company %} · {{ d.company }}{% endif %}</h1>
+      <h1>Dashboard{% if d.company == NO_COMPANY %} · No company{% elif d.company %} · {{ d.company }}{% endif %}
+        {%- if d.project == NO_PROJECT %} · No project{% elif d.project %} · {{ d.project }}{% endif %}</h1>
       <p class="muted small">By invoice date. <strong>Purchases</strong> = bills the company pays,
         <strong>sales</strong> = bills it raises (money it receives). Rejected invoices and duplicate copies are not
         counted, and different currencies are never added together.
@@ -23,6 +24,11 @@
         {% if d.company and d.company != NO_COMPANY %}
           {% if d.company_gstin %}{{ d.company }}'s own GSTIN, found from its invoices: {{ d.company_gstin }}.{% endif %}
           <a href="{{ url_for('invoices', company=d.company) }}">Open its folder</a>
+        {% endif %}
+        {% if d.internal %}
+          <br>{{ d.internal }} bill{{ 's' if d.internal != 1 }} from one of your companies to another
+          {{ 'are' if d.internal != 1 else 'is' }} left out of these totals: that money stays inside your group.
+          Each company's own books still count {{ 'them' if d.internal != 1 else 'it' }} (choose the company above).
         {% endif %}</p>
     </div>
     {% if d.currencies or d.companies %}
@@ -34,6 +40,15 @@
           {% if d.has_unassigned %}<option value="{{ NO_COMPANY }}" {% if d.company == NO_COMPANY %}selected{% endif %}>No company</option>{% endif %}
         </select>
       </label>
+      {% if d.projects or d.project %}
+      <label class="small">Project
+        <select name="project" data-autosubmit>
+          <option value="">All projects</option>
+          {% for p in d.projects %}<option value="{{ p }}" {% if p == d.project %}selected{% endif %}>{{ p }}</option>{% endfor %}
+          <option value="{{ NO_PROJECT }}" {% if d.project == NO_PROJECT %}selected{% endif %}>No project</option>
+        </select>
+      </label>
+      {% endif %}
       {% if d.currencies %}
       <label class="small">Currency
         <select name="currency" data-autosubmit>
@@ -194,6 +209,59 @@
       </tbody>
     </table></div>
   </details>
+</section>
+{% endif %}
+
+{% if d.projects %}
+<section class="card viz" id="projects">
+  <div class="result-head">
+    <h2>Project-wise ({{ cur }}, without GST)</h2>
+    <a class="small" href="{{ url_for('invoices', project=NO_PROJECT) }}">Bills in no project</a>
+  </div>
+  <p class="muted small">Margin = the project's sales − its purchases, both without GST{% if not d.company %};
+    bills between your companies are left out{% endif %}. Click a project to see only its bills on this page.</p>
+  {% if d.project_rows %}
+  <ul class="viz-legend">
+    <li><span class="swatch debit"></span>Purchases</li>
+    <li><span class="swatch credit"></span>Sales</li>
+  </ul>
+  <ul class="hbars">
+    {% for p in d.project_rows %}
+      <li data-href="{{ url_with('dashboard', project=p.name or NO_PROJECT) }}" tabindex="0"
+          title="{{ p.name or 'No project' }}: purchases {{ p.purchases | amount(cur) }}, sales {{ p.sales | amount(cur) }} {{ cur }} without GST in {{ p.invoices }} bill{{ 's' if p.invoices != 1 }}">
+        <span class="hbar-name">{{ p.name or 'No project' }}</span>
+        <span class="hbar-track pair">
+          <span class="hbar debit{% if not p.purchases %} zero{% endif %}" style="width: {{ pct(p.purchases, d.project_max) }}%"></span>
+          <span class="hbar credit{% if not p.sales %} zero{% endif %}" style="width: {{ pct(p.sales, d.project_max) }}%"></span>
+        </span>
+        <span class="hbar-value pair"><span><i class="swatch debit"></i> {{ p.purchases | amount(cur) }}</span>
+          <span><i class="swatch credit"></i> {{ p.sales | amount(cur) }}</span></span>
+      </li>
+    {% endfor %}
+  </ul>
+  <div class="table-wrap"><table class="kv">
+    <thead><tr><th>Project</th><th class="num">Bills</th><th class="num">Sales</th><th class="num">Purchases</th>
+      <th class="num">Margin</th><th class="num">Margin&nbsp;%</th></tr></thead>
+    <tbody>
+      {% for p in d.project_rows %}<tr data-href="{{ url_with('dashboard', project=p.name or NO_PROJECT) }}">
+        <td>{{ p.name or 'No project' }}{% if p.no_tax %}<br><span class="muted small">GST not found on {{ p.no_tax }}
+          bill{{ 's' if p.no_tax != 1 }}: the whole total is counted</span>{% endif %}</td>
+        <td class="num">{{ p.invoices }}</td>
+        <td class="num">{{ p.sales | amount(cur) }}</td><td class="num">{{ p.purchases | amount(cur) }}</td>
+        <td class="num">{% if p.name %}{{ p.margin | amount(cur) }}{% if p.margin < 0 %} <span class="badge low">loss</span>{% endif %}{% else %}–{% endif %}</td>
+        <td class="num">{% if p.name and p.margin_pct is not none %}{{ p.margin_pct }}%{% else %}–{% endif %}</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}
+    <p class="muted">No {{ cur }} bills dated in this period. Try another period.</p>
+  {% endif %}
+</section>
+{% else %}
+<section class="card" id="projects">
+  <h2>Project-wise</h2>
+  <p class="muted small">No bill is in a project yet. Put bills in a project (on the Add invoices page, on an
+    invoice's page, or select bills in the <a href="{{ url_for('invoices') }}">Invoices</a> list) to see each
+    project's sales, purchases and margin here.</p>
 </section>
 {% endif %}
 

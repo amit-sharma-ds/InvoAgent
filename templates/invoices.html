@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_company.html" import company_input with context %}
+{% from "_company.html" import company_input, project_input with context %}
 {% block content %}
 <section class="card">
   <div class="result-head">
@@ -23,6 +23,13 @@
       {% for c in companies %}<option value="{{ c }}" {% if filters.company == c %}selected{% endif %}>{{ c }}</option>{% endfor %}
       <option value="{{ NO_COMPANY }}" {% if filters.company == NO_COMPANY %}selected{% endif %}>No company</option>
     </select>
+    {% if projects or filters.project %}
+    <select name="project" aria-label="Project">
+      <option value="">All projects</option>
+      {% for p in projects %}<option value="{{ p }}" {% if filters.project == p %}selected{% endif %}>{{ p }}</option>{% endfor %}
+      <option value="{{ NO_PROJECT }}" {% if filters.project == NO_PROJECT %}selected{% endif %}>No project</option>
+    </select>
+    {% endif %}
     <select name="status">
       <option value="">All statuses</option>
       {% for s in statuses %}<option value="{{ s }}" {% if filters.status == s %}selected{% endif %}>{{ s }}</option>{% endfor %}
@@ -34,7 +41,7 @@
     <label class="small"><input type="checkbox" name="review" value="1" {% if filters.review %}checked{% endif %}> Needs review only</label>
     {% if filters.batch_id %}<input type="hidden" name="batch" value="{{ filters.batch_id }}">{% endif %}
     <button class="btn" type="submit">Filter</button>
-    {% if filters.q or filters.status or filters.review or filters.batch_id or filters.review_status or filters.company %}
+    {% if filters.q or filters.status or filters.review or filters.batch_id or filters.review_status or filters.company or filters.project %}
       <a class="small" href="{{ url_for('invoices') }}">Clear filters</a>
     {% endif %}
   </form>
@@ -54,6 +61,9 @@
       {{ company_input('', id='move-company', placeholder='Company to move to') }}
       <button class="btn secondary" type="submit" id="bulk-move-btn" formaction="{{ url_for('move_invoices') }}"
               data-no-confirm disabled>Move selected</button>
+      {{ project_input('', id='bulk-project', placeholder='Project (empty: none)') }}
+      <button class="btn secondary" type="submit" id="bulk-project-btn" formaction="{{ url_for('set_invoices_project') }}"
+              data-no-confirm disabled>Set project</button>
       <button class="btn danger" type="submit" id="bulk-delete-btn" disabled>Delete selected</button>
     </form>
   </div>

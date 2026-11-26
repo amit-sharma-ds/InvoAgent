@@ -9,10 +9,11 @@ from invoice_parser.companies import (NO_COMPANY, PURCHASE, SALE, build_dashboar
 OWN, SUPPLIER, CUSTOMER = "06BKXPT4822Q3ZY", "09AGHPR3344C1ZG", "06AJKPM6655F1ZZ"
 
 
-def _row(n, company, seller, seller_gstin, buyer, buyer_gstin, total, tax, day="2026-10-05", currency="INR"):
+def _row(n, company, seller, seller_gstin, buyer, buyer_gstin, total, tax, day="2026-10-05", currency="INR",
+         project=None):
     return {"id": n, "company": company, "entry_type": None, "currency": currency, "invoice_date": day,
             "total": total, "tax": tax, "seller_name": seller, "seller_tax_id": seller_gstin,
-            "buyer_name": buyer, "buyer_tax_id": buyer_gstin}
+            "buyer_name": buyer, "buyer_tax_id": buyer_gstin, "project": project}
 
 
 ROWS = [
@@ -170,7 +171,7 @@ def test_your_companies_decide_purchase_or_sale():
 
 def test_the_books_of_one_of_your_companies():
     """A bill from one of your companies to the other: a sale in the seller's books, a purchase in the
-    buyer's, once in the books of all companies."""
+    buyer's, and left out of the figures of all companies together (the money stays in the group)."""
     own = [{"name": "Kavya Infotech", "gstin": OWN}, {"name": "OM TRADERS", "gstin": SUPPLIER}]
     between = _row(1, "Kavya Infotech", "Kavya Infotech Pvt Ltd", OWN, "OM TRADERS", SUPPLIER, 1180.0, 180.0)
     bought = _row(2, "OM TRADERS", "Ganesha Softech", CUSTOMER, "OM Traders", SUPPLIER, 590.0, 90.0)
@@ -182,9 +183,55 @@ def test_the_books_of_one_of_your_companies():
 
     assert books("Kavya Infotech") == (1180.0, 0.0, 1)
     assert books("OM TRADERS") == (0.0, 1770.0, 2)
-    assert books(None) == (1180.0, 590.0, 2)
+    assert books(None) == (0.0, 590.0, 1)
+    group = build_dashboard([dict(r) for r in rows], period="all", own=own)
+    assert group["internal"] == 1 and [v["name"] for v in group["vendors"]] == ["Ganesha Softech"]
+    assert group["customers"] == []  # your other company is not a customer of the group
+    # the company-wise bars still show each folder with all its bills
+    assert [(c["name"], c["credit"], c["debit"]) for c in group["company_rows"]] == [
+        ("Kavya Infotech", 1180.0, 0.0), ("OM TRADERS", 0.0, 590.0)]
     om = build_dashboard([dict(r) for r in rows], period="all", company="OM TRADERS", own=own)
     assert [(c["name"], c["debit"]) for c in om["company_rows"]] == [("OM TRADERS", 1770.0)]
+    assert om["internal"] == 0
+    # one company of your own only: nothing is left out
+    alone = build_dashboard([dict(r) for r in rows], period="all", own=own[:1])
+    assert alone["internal"] == 0 and alone["summary"]["invoices"] == 2
+
+
+def test_project_margins_without_gst_across_your_companies():
+    """One project run in both of your companies: Kavya Infotech buys for it and sells to OM TRADERS,
+    which sells to the client. The group's margin is the client's sale minus the supplier's bill; each
+    company's books have their own margin. GST is not part of a margin."""
+    own = [{"name": "Kavya Infotech", "gstin": OWN}, {"name": "OM TRADERS", "gstin": SUPPLIER}]
+    rows = [
+        _row(1, "Kavya Infotech", "Ganesha Softech", CUSTOMER, "Kavya Infotech", OWN, 826.0, 126.0, project="Racking"),
+        _row(2, "Kavya Infotech", "Kavya Infotech", OWN, "OM TRADERS", SUPPLIER, 944.0, 144.0, project="Racking"),
+        _row(3, "OM TRADERS", "OM TRADERS", SUPPLIER, "Shri SunElectricals", None, 1180.0, 180.0, project="Racking"),
+        _row(4, "OM TRADERS", "Ganesha Softech", CUSTOMER, "OM TRADERS", SUPPLIER, 118.0, 18.0),
+        _row(5, "Kavya Infotech", "Rahul Electronics", None, "Kavya Infotech", OWN, 50.0, None, project="Office"),
+    ]
+
+    def dash(company=None, project=None):
+        return build_dashboard([dict(r) for r in rows], period="all", company=company, own=own, project=project)
+
+    def margins(d):
+        return [(p["name"], p["sales"], p["purchases"], p["margin"], p["margin_pct"]) for p in d["project_rows"]]
+
+    group = dash()
+    assert group["projects"] == ["Office", "Racking"] and group["internal"] == 1
+    assert margins(group) == [("Racking", 1000.0, 700.0, 300.0, 30.0), ("Office", 0.0, 50.0, -50.0, None),
+                              (None, 0.0, 100.0, -100.0, None)]
+    assert group["project_rows"][1]["no_tax"] == 1  # its GST was not found: the whole total counts
+    assert margins(dash("Kavya Infotech"))[0] == ("Racking", 800.0, 700.0, 100.0, 12.5)
+    assert margins(dash("OM TRADERS")) == [("Racking", 1000.0, 800.0, 200.0, 20.0), (None, 0.0, 100.0, -100.0, None)]
+    # one project chosen: every figure of the page is that project's
+    racking = dash(project="Racking")
+    assert racking["project"] == "Racking" and racking["summary"]["invoices"] == 2
+    assert (racking["summary"]["credit"], racking["summary"]["debit"]) == (1180.0, 826.0)
+    assert margins(racking) == [("Racking", 1000.0, 700.0, 300.0, 30.0)]
+    assert margins(dash(project="-")) == [(None, 0.0, 100.0, -100.0, None)]  # the bills in no project
+    unknown = dash(project="Nope")
+    assert unknown["project"] is None and unknown["summary"]["invoices"] == 4
 
 
 def test_invoices_without_a_currency_are_counted_as_missing_not_hidden():

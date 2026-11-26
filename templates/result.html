@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% from "_company.html" import company_input with context %}
+{% from "_company.html" import company_input, project_input with context %}
 
 {% macro badge(conf) -%}
 <span class="badge {% if conf >= 0.8 %}good{% elif conf >= 0.5 %}mid{% else %}low{% endif %}">{{ (conf * 100) | round | int }}%</span>
@@ -72,8 +72,12 @@
           <option value="sale" {% if counts_as == 'sale' %}selected{% endif %}>Sale (money received)</option>
         </select>
       </label>
+      <label>Project
+        {{ project_input(invoice.project, id='invoice-project') }}
+      </label>
       <button class="btn secondary" type="submit">Save</button>
       {% if invoice.company %}<a class="small" href="{{ url_for('invoices', company=invoice.company) }}">Open folder</a>{% endif %}
+      {% if invoice.project %}<a class="small" href="{{ url_for('dashboard', project=invoice.project, period='all') }}">Project figures</a>{% endif %}
     </form>
     {% if invoice.viewed_side %}
       <p class="small viewed-side">In the books of <strong>{{ view_company }}</strong> this bill is a

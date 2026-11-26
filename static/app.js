@@ -198,15 +198,19 @@
   }, true);
 })();
 
-// Invoices list: "Move selected" sends the picked rows to a company (no delete question for it).
+// Invoices list: "Move selected" sends the picked rows to a company, "Set project" puts them in a project
+// (no delete question for either).
 (function () {
-  const moveBtn = document.getElementById("bulk-move-btn");
-  if (!moveBtn) return;
+  const buttons = [[document.getElementById("bulk-move-btn"), "Move selected"],
+                   [document.getElementById("bulk-project-btn"), "Set project"]].filter(([btn]) => btn);
+  if (!buttons.length) return;
   const picks = () => [...document.querySelectorAll('input[name="ids"][form="bulk-delete"]')];
   const refresh = () => {
     const n = picks().filter((c) => c.checked).length;
-    moveBtn.disabled = n === 0;
-    moveBtn.textContent = n ? `Move selected (${n})` : "Move selected";
+    for (const [btn, text] of buttons) {
+      btn.disabled = n === 0;
+      btn.textContent = n ? `${text} (${n})` : text;
+    }
   };
   document.addEventListener("change", (e) => { if (e.target.matches('input[name="ids"], #pick-all')) refresh(); });
   refresh();
@@ -419,6 +423,8 @@
     send.textContent = "Preparing photos...";
     const data = new FormData();
     data.append("company", company ? company.value : "");
+    const project = $("upload-project");
+    if (project) data.append("project", project.value);
     for (const it of items) {
       let file = it.file;
       if (window.invoagentShrinkPhoto) {

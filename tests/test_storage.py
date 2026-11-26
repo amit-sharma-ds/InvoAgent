@@ -180,6 +180,8 @@ def _fill(store):
     store.set_company([ids[0], ids[1], ids[5]], "Kavya Infotech")
     store.set_company([ids[3]], "OM TRADERS", "sale")
     store.add_file("again2.pdf", b"file 4", company="OM TRADERS")  # known file without a company: moved
+    store.set_project([ids[0], ids[5]], "Racking")
+    store.add_file("again3.pdf", b"file 1", project="Office")  # known file in no project: put in it
     return ids, batch
 
 
@@ -223,10 +225,13 @@ def test_mongodb_store_answers_like_the_sqlite_store(tmp_path):
                   lambda s: s.export_rows(company="OM TRADERS"), lambda s: s.money_rows(),
                   lambda s: s.money_rows(company="Kavya Infotech"), lambda s: s.company_names(),
                   lambda s: s.company_counts(), lambda s: s.files_of("Kavya Infotech"), lambda s: s.files_of("-"),
+                  lambda s: s.project_names(), lambda s: s.search(project="Racking"), lambda s: s.search(project="-"),
+                  lambda s: s.export_rows(project="Office"), lambda s: s.export_line_items(project="Racking"),
                   lambda s: [_without_item_ids(s.get(i)) for i in ids]]
-        checks += [lambda s, p=p, c=c, co=co: s.dashboard(currency=c, period=p, today=today, company=co)
+        checks += [lambda s, p=p, c=c, co=co, pr=pr: s.dashboard(currency=c, period=p, today=today, company=co,
+                                                                  project=pr)
                    for p in ("12m", "fy", "lfy", "all") for c in (None, "INR", "USD", "XYZ")
-                   for co in (None, "Kavya Infotech", "-")]
+                   for co in (None, "Kavya Infotech", "-") for pr in (None, "Racking", "-")]
         for n, check in enumerate(checks):
             a, b = _same(check(sqlite)), _same(check(mongo))
             if n == 2:  # vendors: rows with the same total may come in either order
@@ -374,3 +379,25 @@ def test_companies_in_the_store(store):
     assert [f["id"] for f in store.files_of("Kavya Infotech")] == [a, b]
     dash = store.dashboard(period="all", company="Kavya Infotech")
     assert dash["summary"]["credit"] == 1770.0 and dash["summary"]["debit"] == 0.0
+
+
+def test_projects_in_the_store(store):
+    a, _ = store.add_file("a.pdf", b"a", queue=False, company="Kavya Infotech", project="Racking")
+    b, _ = store.add_file("b.pdf", b"b", queue=False)
+    c, _ = store.add_file("c.pdf", b"c", queue=False)
+    for invoice_id, total in ((a, 1180.0), (b, 590.0), (c, 236.0)):
+        store.save_result(invoice_id, _result(f"N-{invoice_id}", total, tax=round(total * 18 / 118, 2)), 5)
+    assert store.get(a)["project"] == "Racking"  # reading the bill keeps its project
+    assert store.add_file("again.pdf", b"b", project="office") == (b, False)
+    assert store.add_file("again.pdf", b"b", project="Racking") == (b, False)
+    assert store.get(b)["project"] == "office"  # a file already in a project stays in it
+    assert store.project_names() == ["office", "Racking"]
+    assert store.set_project([b, c], "Racking") == 2
+    assert [r["id"] for r in store.search(project="Racking")[1]] == [c, b, a]
+    assert store.set_project([c], None) == 1
+    assert [r["id"] for r in store.search(project="-")[1]] == [c]
+    assert [r["project"] for r in store.export_rows()] == ["Racking", "Racking", None]
+    assert {r["project"] for r in store.money_rows()} == {"Racking", None}
+    dash = store.dashboard(period="all", project="Racking")
+    assert dash["project"] == "Racking" and dash["summary"]["invoices"] == 2
+    assert [(p["name"], p["purchases"]) for p in dash["project_rows"]] == [("Racking", 1500.0)]

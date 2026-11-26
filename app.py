@@ -32,9 +32,9 @@ from flask import (Flask, Response, abort, flash, jsonify, redirect, render_temp
                    send_file, session, url_for)
 
 from invoice_parser import auth, config, fast_ocr, file_view
-from invoice_parser.companies import (ENTRY_TYPES, NO_COMPANY, clean_company, company_gstins,
-                                      file_without_company, folders, names_company, own_companies_text,
-                                      parse_own_companies, side_of, side_seen_by, with_sides)
+from invoice_parser.companies import (ENTRY_TYPES, NO_COMPANY, NO_PROJECT, clean_company, clean_project,
+                                      company_gstins, file_without_company, folders, names_company,
+                                      own_companies_text, parse_own_companies, side_of, side_seen_by, with_sides)
 from invoice_parser.settings import load_settings, save_settings
 from invoice_parser.exporting import build_xlsx, to_csv
 from invoice_parser.pipeline import get_parser
@@ -180,8 +180,10 @@ def inject_layout():
             "back_url": back_url(), "current_user": session.get("user"), "db_error": config.MONGODB_ERROR,
             "company_names": lambda: store().company_names(),  # called only by the pages that list them
             "own_company_names": lambda: [f["name"] for f in store().own_companies()],
+            "project_names": lambda: store().project_names(),
             "view_company": _view_company(),
-            "current_company": session.get("company", ""), "NO_COMPANY": NO_COMPANY}
+            "current_company": session.get("company", ""), "current_project": session.get("project", ""),
+            "NO_COMPANY": NO_COMPANY, "NO_PROJECT": NO_PROJECT}
 
 
 def _view_company():
@@ -220,6 +222,7 @@ def _filters():
         "batch_id": request.args.get("batch", type=int),
         "review_status": request.args.get("rstatus") or None,
         "company": request.args.get("company") or None,
+        "project": request.args.get("project") or None,
     }
 
 
@@ -236,6 +239,20 @@ def _remember_company():
     company = _chosen_company(request.form.get("company"))
     session["company"] = company or ""
     return company
+
+
+def _chosen_project(value):
+    """A project typed in a form; the known spelling when it differs only in case. None: no project."""
+    return clean_project(value, store().project_names())
+
+
+def _remember_project():
+    """The project field of an upload form: used for this upload and offered next time. Empty: no project."""
+    if "project" not in request.form:
+        return clean_project(session.get("project"))
+    project = _chosen_project(request.form.get("project"))
+    session["project"] = project or ""
+    return project
 
 
 def _render_result(result, invoice=None):
@@ -277,9 +294,9 @@ def _expand_uploads(uploads):
     return files, skipped
 
 
-def _store_and_process(name, data, company=None):
+def _store_and_process(name, data, company=None, project=None):
     """Save one file and parse it right away. Returns (invoice_id, is_new)."""
-    invoice_id, is_new = store().add_file(name, data, queue=False, company=company)
+    invoice_id, is_new = store().add_file(name, data, queue=False, company=company, project=project)
     if is_new:
         worker().process_now(invoice_id)
     return invoice_id, is_new
@@ -312,7 +329,7 @@ def _after_upload(url, message=None):
 def upload():
     uploads = request.files.getlist("files") + request.files.getlist("file")
     has_zip = any(u.filename and u.filename.lower().endswith(".zip") for u in uploads)
-    company = _remember_company()
+    company, project = _remember_company(), _remember_project()
     files, skipped = _expand_uploads(uploads)
     if not files:
         if skipped:
@@ -320,15 +337,16 @@ def upload():
         return _after_upload(url_for("upload_page"), "Choose a PDF, an image or a ZIP file.")
 
     if len(files) == 1 and not has_zip:  # single invoice: process now and show the result
-        invoice_id, is_new = _store_and_process(*files[0], company=company)
+        invoice_id, is_new = _store_and_process(*files[0], company=company, project=project)
         return _after_upload(url_for("invoice_detail", invoice_id=invoice_id),
                              None if is_new else "This exact file was processed before. Showing the saved result.")
 
     batch_id = store().create_batch(f"Upload of {len(files)} files, {datetime.now():%d %b %Y %H:%M}")
     duplicates = sum(1 for name, data in files
-                     if not store().add_file(name, data, batch_id=batch_id, company=company)[1])
+                     if not store().add_file(name, data, batch_id=batch_id, company=company, project=project)[1])
     worker().notify()
-    note = f"{len(files) - duplicates} files queued for processing" + (f" in {company}." if company else ".")
+    note = (f"{len(files) - duplicates} files queued for processing" + (f" in {company}" if company else "")
+            + (f", project {project}." if project else "."))
     if duplicates:
         note += f" {duplicates} were already in the database and were skipped."
     if skipped:
@@ -341,7 +359,8 @@ def invoices():
     filters = _filters()
     page = max(1, request.args.get("page", 1, type=int))
     total, rows = store().search(**filters, limit=PAGE_SIZE, offset=(page - 1) * PAGE_SIZE)
-    return render_template("invoices.html", companies=store().company_names(), rows=rows, columns=TABLE_COLUMNS, total=total, page=page,
+    return render_template("invoices.html", companies=store().company_names(), projects=store().project_names(),
+                           rows=rows, columns=TABLE_COLUMNS, total=total, page=page,
                            pages=max(1, -(-total // PAGE_SIZE)), filters=filters, stats=store().stats(),
                            statuses=STATUSES, review_statuses=REVIEW_STATUSES, money_columns=MONEY_COLUMNS)
 
@@ -391,15 +410,16 @@ def _nice_max(value):
 
 @app.get("/dashboard")
 def dashboard():
-    """Debit (purchases) and credit (sales) by month and by company, GST, top suppliers and customers,
-    for one currency, one period and all or one company."""
+    """Debit (purchases) and credit (sales) by month, by company and by project, GST, top suppliers and
+    customers, for one currency, one period, all or one company and all or one project."""
     company = request.args.get("company", _view_company() or "")  # the books chosen in the sidebar, by default
     data = store().dashboard(currency=request.args.get("currency"), period=request.args.get("period", "12m"),
-                             company=company or None)
+                             company=company or None, project=request.args.get("project") or None)
     data["axis_max"] = _nice_max(max((max(b["debit"], b["credit"]) for b in data["buckets"]), default=0))
     data["vendor_max"] = max((v["total"] or 0 for v in data["vendors"]), default=0) or 1
     data["customer_max"] = max((v["total"] or 0 for v in data["customers"]), default=0) or 1
     data["company_max"] = max((max(c["debit"], c["credit"]) for c in data["company_rows"]), default=0) or 1
+    data["project_max"] = max((max(p["purchases"], p["sales"]) for p in data["project_rows"]), default=0) or 1
     return render_template("dashboard.html", d=data, ov=store().overview(), periods=[("12m", "Last 12 months"),
                            ("fy", "This financial year"), ("lfy", "Last financial year"), ("all", "All years")])
 
@@ -429,9 +449,9 @@ def invoice_detail(invoice_id):
 
 @app.post("/invoices/<int:invoice_id>/company")
 def set_invoice_company(invoice_id):
-    """Move one invoice to another company and / or set its side (purchase or sale). A side left as it
-    was shown stays as it was (found from the bill again for another company); a side changed by hand is
-    kept, unless it is what the bill shows anyway."""
+    """Move one invoice to another company and / or set its side (purchase or sale) and its project. A side
+    left as it was shown stays as it was (found from the bill again for another company); a side changed
+    by hand is kept, unless it is what the bill shows anyway."""
     row = store().get(invoice_id)
     if row is None:
         abort(404)
@@ -447,8 +467,26 @@ def set_invoice_company(invoice_id):
         if side_of({**row, "company": company, "entry_type": None}, gstin) == entry_type:
             entry_type = None
     store().set_company([invoice_id], company, entry_type)
-    flash(f"Invoice #{invoice_id} is in {company or 'no company'}.")
+    message = f"Invoice #{invoice_id} is in {company or 'no company'}"
+    if "project" in request.form:
+        project = _chosen_project(request.form.get("project"))
+        store().set_project([invoice_id], project)
+        message += f", project {project}" if project else ", no project"
+    flash(message + ".")
     return redirect(url_for("invoice_detail", invoice_id=invoice_id))
+
+
+@app.post("/invoices/project")
+def set_invoices_project():
+    """Put the invoices selected in the list in a project (empty: take them out of their project)."""
+    ids = [int(i) for i in request.form.getlist("ids") if i.isdigit()]
+    if not ids:
+        return _back_to("invoices", "Select one or more invoices to put in a project.")
+    project = _chosen_project(request.form.get("project"))
+    n = store().set_project(ids, project)
+    flash(f"{n} invoice{'s' if n != 1 else ''} " + (f"put in project {project}." if project
+                                                     else "taken out of their project."))
+    return redirect(back_url())
 
 
 @app.post("/invoices/move")

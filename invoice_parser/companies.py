@@ -14,6 +14,12 @@ matches the company, else the GSTIN on most of them), so the side is found even 
 is short, like "JP". A reviewer can set the side by hand (entry_type). Invoices without a company count
 as purchases, like the bills a business receives.
 (Inside the code and the stored figures purchases are still called 'debit' and sales 'credit'.)
+
+A bill can also be in a project (set by a person: a project is not printed on the bill). One project can
+run in several of your companies. Its margin is its sales minus its purchases, both without GST (GST is
+passed on or claimed back, it is not the company's money). In the figures of all companies together, a
+bill from one of your companies to another is left out: that money stays inside your group (in each
+company's own books it is still the seller's sale and the buyer's purchase).
 """
 import re
 import time
@@ -25,9 +31,10 @@ from functools import lru_cache
 PURCHASE, SALE = "purchase", "sale"
 ENTRY_TYPES = (PURCHASE, SALE)
 NO_COMPANY = "-"  # filter value: the invoices without a company
+NO_PROJECT = "-"  # filter value: the invoices in no project
 # the fields of the counted invoices that the dashboard and the folders need
 MONEY_FIELDS = ["id", "company", "entry_type", "currency", "invoice_date", "total", "tax", "seller_name",
-                "seller_tax_id", "buyer_name", "buyer_tax_id"]
+                "seller_tax_id", "buyer_name", "buyer_tax_id", "project"]
 _LEGAL_WORDS = {"M", "S", "MS", "MESSRS", "THE", "PVT", "PRIVATE", "LTD", "LIMITED", "LLP", "CO", "COMPANY",
                 "AND", "INC", "CORP", "CORPORATION", "LLC", "PLC"}
 
@@ -41,6 +48,11 @@ def clean_company(name, known=()):
         if other.lower() == name.lower():
             return other
     return name
+
+
+def clean_project(name, known=()):
+    """A project name as typed, tidied; the existing spelling when it differs only in case."""
+    return clean_company(name, known)
 
 
 OWN_COMPANIES_MAX = 20
@@ -172,6 +184,26 @@ def names_company(row, company, gstin=None):
     return names_match(company, row.get("seller_name")) or names_match(company, row.get("buyer_name"))
 
 
+def _own_party(row, side, own, gstins):
+    """The one of your companies that is the seller / buyer of the bill: by GSTIN when both are known,
+    else by name."""
+    gstin = _gstin(row.get(f"{side}_tax_id"))
+    for f in own:
+        known = gstins.get(f["name"])
+        if (known == gstin) if known and gstin else names_match(f["name"], row.get(f"{side}_name")):
+            return f["name"]
+    return None
+
+
+def between_your_companies(row, own, gstins):
+    """A bill from one of your companies to another one: money that stays inside your group."""
+    if len(own or ()) < 2:
+        return False
+    seller = _own_party(row, "seller", own, gstins)
+    buyer = seller and _own_party(row, "buyer", own, gstins)
+    return bool(buyer) and buyer != seller
+
+
 def side_seen_by(row, company, gstins):
     """The invoice's side in the books of `company` (None: in its own folder's books). A bill from one of
     your companies to another is the seller's sale and, seen by the buyer, its purchase."""
@@ -301,16 +333,40 @@ def _top_parties(rows, side, limit=10):
     return sorted(out, key=lambda v: (-v["total"], v["name"]))[:limit]
 
 
-def build_dashboard(rows, currency=None, period="12m", today=None, company=None, known=(), own=()):
+def _project_rows(rows):
+    """One row per project (and one for the bills in no project): sales and purchases without GST, and
+    the margin. A bill whose GST was not found counts with its whole total (no_tax says how many)."""
+    groups = {}
+    for r in rows:
+        g = groups.setdefault(r.get("project") or None, {
+            "name": r.get("project") or None, "invoices": 0, "sales": 0.0, "purchases": 0.0, "sales_n": 0,
+            "purchases_n": 0, "no_tax": 0})
+        side = "sales" if r["side"] == SALE else "purchases"
+        if r.get("tax") is None and r.get("total"):
+            g["no_tax"] += 1
+        g[side] += (r.get("total") or 0.0) - (r.get("tax") or 0.0)
+        g[f"{side}_n"] += 1
+        g["invoices"] += 1
+    for g in groups.values():
+        g["sales"], g["purchases"] = round(g["sales"], 2), round(g["purchases"], 2)
+        g["margin"] = round(g["sales"] - g["purchases"], 2)
+        g["margin_pct"] = round(100 * g["margin"] / g["sales"], 1) if g["sales"] > 0 else None
+    return sorted(groups.values(),
+                  key=lambda g: (g["name"] is None, -(g["sales"] + g["purchases"]), (g["name"] or "").lower()))
+
+
+def build_dashboard(rows, currency=None, period="12m", today=None, company=None, known=(), own=(), project=None):
     """Dashboard figures from the counted invoices (MONEY_FIELDS), for ONE currency (amounts in different
-    currencies are never added together), one period of invoice dates and all or one company.
+    currencies are never added together), one period of invoice dates, all or one company and all or one
+    project.
     period: '12m' last 12 months, 'fy' this financial year (Apr-Mar), 'lfy' last financial year,
     'all' everything (shown per year). known: every company name (also those with nothing counted yet).
-    own: your companies [{"name", "gstin"}]."""
+    own: your companies [{"name", "gstin"}]. project: a project's name, NO_PROJECT or None (all)."""
     today = today or datetime.now().date()
     gstins = company_gstins(rows, own)
     companies = sorted({r["company"] for r in rows if r.get("company")} | set(known), key=str.lower)
     has_unassigned = any(not r.get("company") for r in rows)
+    projects = sorted({r["project"] for r in rows if r.get("project")}, key=str.lower)
     if company == NO_COMPANY:
         rows = [r for r in rows if not r.get("company")]
     elif company in companies:
@@ -319,8 +375,15 @@ def build_dashboard(rows, currency=None, period="12m", today=None, company=None,
         rows = [r for r in rows if r.get("company") == company or names_company(r, company, gstins.get(company))]
     else:
         company = None
+    if project == NO_PROJECT:
+        rows = [r for r in rows if not r.get("project")]
+    elif project in projects:
+        rows = [r for r in rows if r.get("project") == project]
+    else:
+        project = None
     base = {"companies": companies, "company": company, "has_unassigned": has_unassigned,
-            "company_gstin": gstins.get(company), "own_companies": bool(own)}
+            "company_gstin": gstins.get(company), "own_companies": bool(own), "projects": projects,
+            "project": project}
 
     counts, last = Counter(), {}
     for r in rows:
@@ -332,7 +395,8 @@ def build_dashboard(rows, currency=None, period="12m", today=None, company=None,
     currencies = [{"currency": c, "n": n} for c, n in sorted(counts.items(), key=lambda cn: (-cn[1], -last[cn[0]]))]
     if not currencies:
         return {**base, "currencies": [], "currency": None, "period": period, "buckets": [], "vendors": [],
-                "customers": [], "company_rows": [], "summary": None, "undated": 0, "by_year": False}
+                "customers": [], "company_rows": [], "project_rows": [], "summary": None, "undated": 0,
+                "internal": 0, "by_year": False}
     if currency not in counts:
         currency = currencies[0]["currency"]
     period, start, end, month_keys = _period(period, today)
@@ -345,16 +409,18 @@ def build_dashboard(rows, currency=None, period="12m", today=None, company=None,
         r["side"] = side_seen_by(r, viewed, gstins)
         if viewed:
             r["company"] = viewed  # counted in the books shown
+    # all companies together: the bills between your companies are not the group's sales or purchases
+    group = company is None
+    counted = [r for r in dated if not (group and between_your_companies(r, own, gstins))]
 
     width = 7 if month_keys is not None else 4
     buckets = {k: None for k in (month_keys or sorted({r["invoice_date"][:4] for r in dated}))}
     for k in buckets:
         buckets[k] = {"key": k, "invoices": 0, "total": 0.0, "tax": 0.0, "debit": 0.0, "credit": 0.0,
                       "debit_tax": 0.0, "credit_tax": 0.0}
-    summary = {"invoices": len(dated), "total": 0.0, "tax": 0.0, "debit": 0.0, "credit": 0.0, "debit_n": 0,
+    summary = {"invoices": len(counted), "total": 0.0, "tax": 0.0, "debit": 0.0, "credit": 0.0, "debit_n": 0,
                "credit_n": 0, "tax_in": 0.0, "tax_out": 0.0}
-    per_company = {}
-    for r in dated:
+    for r in counted:
         total, tax = r.get("total") or 0.0, r.get("tax") or 0.0
         side, money = ("debit", "tax_in") if r["side"] == PURCHASE else ("credit", "tax_out")
         b = buckets.get(r["invoice_date"][:width])
@@ -369,6 +435,10 @@ def build_dashboard(rows, currency=None, period="12m", today=None, company=None,
         summary[side] += total
         summary[f"{side}_n"] += 1
         summary[money] += tax
+    per_company = {}  # each folder with all its bills, as before (a bill to your other company is a sale here)
+    for r in dated:
+        total = r.get("total") or 0.0
+        side = "debit" if r["side"] == PURCHASE else "credit"
         c = per_company.setdefault(r.get("company") or NO_COMPANY, {
             "name": r.get("company"), "invoices": 0, "debit": 0.0, "credit": 0.0, "debit_n": 0, "credit_n": 0})
         c["invoices"] += 1
@@ -382,8 +452,8 @@ def build_dashboard(rows, currency=None, period="12m", today=None, company=None,
         summary[key] = round(summary[key], 2)
     summary["net"] = round(summary["credit"] - summary["debit"], 2)
     summary["gst_net"] = round(summary["tax_out"] - summary["tax_in"], 2)  # > 0: GST to pay
-    purchases = [r for r in dated if r["side"] == PURCHASE]
-    sales = [r for r in dated if r["side"] == SALE]
+    purchases = [r for r in counted if r["side"] == PURCHASE]
+    sales = [r for r in counted if r["side"] == SALE]
     summary["vendors"] = len({_party_key(r.get("seller_name"), r.get("seller_tax_id"))
                               for r in purchases if (r.get("seller_name") or "").strip()})
     summary["companies"] = len({r["company"] for r in dated if r.get("company")})
@@ -396,8 +466,9 @@ def build_dashboard(rows, currency=None, period="12m", today=None, company=None,
     company_rows.sort(key=lambda c: (c["name"] is None, -(c["debit"] + c["credit"]), (c["name"] or "").lower()))
     return {**base, "currencies": currencies, "currency": currency, "period": period,
             "buckets": list(buckets.values()), "vendors": _top_parties(purchases, "seller"),
-            "customers": _top_parties(sales, "buyer"), "company_rows": company_rows, "summary": summary,
-            "undated": undated, "by_year": month_keys is None}
+            "customers": _top_parties(sales, "buyer"), "company_rows": company_rows,
+            "project_rows": _project_rows(counted), "summary": summary, "undated": undated,
+            "internal": len(dated) - len(counted), "by_year": month_keys is None}
 
 
 def folders(counts, money_rows, own=()):
