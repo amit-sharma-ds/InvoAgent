@@ -288,10 +288,6 @@ td.pick input, th.pick input { width: 17px; height: 17px; cursor: pointer; }
 .login-box .btn { width: 100%; margin-top: 4px; }
 .login-box .stack { display: flex; flex-direction: column; gap: 14px; }
 .login-error { background: #fef3f2; color: var(--low); border: 1px solid #fecdca; padding: 10px 12px; border-radius: 8px; font-size: 14px; }
-.side-view { display: flex; flex-direction: column; gap: 5px; padding: 0 6px; font-size: 12px; color: #98a2b3; }
-.side-view select { width: 100%; padding: 7px 8px; border-radius: 7px; border: 1px solid #344054; background: #1d2939;
-  color: #fff; font: inherit; font-size: 13px; }
-.viewed-side { margin: 4px 0 0; padding: 8px 12px; background: var(--bg); border-radius: 8px; }
 .side-user { font-size: 12px; color: #98a2b3; padding: 0 6px; display: flex; flex-direction: column; gap: 6px; margin-top: auto; }
 .side-user strong { color: #fff; }
 .side-user button { align-self: flex-start; background: #1d2939; color: #d0d5dd; border: 1px solid #344054; border-radius: 7px;

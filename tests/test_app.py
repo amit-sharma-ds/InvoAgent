@@ -223,27 +223,20 @@ def test_deleting_the_original_clears_the_duplicate_pointer(client):
     assert store.get(second)["duplicate_of"] is None
 
 
-def test_the_app_shows_the_books_of_the_company_chosen_in_the_sidebar(client):
-    """Your two companies: a bill from one to the other is the seller's sale; with the buyer chosen in the
-    sidebar ('Books of'), its dashboard counts it as a purchase and the bill says so."""
+def test_the_sidebar_has_no_books_of_choice(client):
+    """Your two companies: a bill from one to the other is the seller's sale. The sidebar has no 'Books of'
+    choice; one company's books are seen by choosing it on the Dashboard."""
     store = app_module.store()
     invoice_id = _upload(client, _to_pdf(_colon_layout) + b"%books", "books.pdf")  # Acme Traders -> Rahul Electronics
     try:
-        assert "Books of" not in client.get("/dashboard").data.decode("utf-8")  # no companies of yours yet
         client.post("/companies/own", data={"companies": "Acme Traders, 27ABCDE1234F1Z0\nRahul Electronics"})
         assert store.get(invoice_id)["company"] == "Acme Traders"  # the seller's
         page = client.get(f"/invoices/{invoice_id}").data.decode("utf-8")
-        assert 'id="view-company"' in page and 'value="sale" selected' in page and "In the books of" not in page
-
-        resp = client.post("/view-company", data={"company": "Rahul Electronics", "next": f"/invoices/{invoice_id}"})
-        assert resp.headers["Location"].endswith(f"/invoices/{invoice_id}")
-        page = client.get(f"/invoices/{invoice_id}").data.decode("utf-8")
-        assert "In the books of <strong>Rahul Electronics</strong> this bill is a\n        <strong>Purchase</strong>" in page
-        dash = client.get("/dashboard?period=all&currency=USD").data.decode("utf-8")
+        assert "Books of" not in page and 'id="view-company"' not in page and 'value="sale" selected' in page
+        assert client.post("/view-company", data={"company": "Rahul Electronics"}).status_code == 404
+        assert "Dashboard · " not in client.get("/dashboard?period=all").data.decode("utf-8")  # all companies
+        dash = client.get("/dashboard?period=all&currency=USD&company=Rahul%20Electronics").data.decode("utf-8")
         assert "Dashboard · Rahul Electronics" in dash and '<option value="Rahul Electronics" selected>' in dash
-        assert "All companies" in client.get("/dashboard?period=all&company=").data.decode("utf-8")
-        client.post("/view-company", data={"company": "Somebody Else", "next": "/dashboard"})  # not yours: all
-        assert "Dashboard · " not in client.get("/dashboard?period=all").data.decode("utf-8")
     finally:
         client.post("/companies/own", data={"companies": ""})
         store.delete([invoice_id])
