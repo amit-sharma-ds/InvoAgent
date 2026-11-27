@@ -142,14 +142,11 @@ table.kv th { width: 40%; font-weight: 600; color: var(--muted); }
 .stat.good .stat-num { color: var(--good); }
 .empty { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
 .empty p { flex-basis: 100%; margin: 0 0 6px; }
-.steps li { margin-bottom: 6px; }
 .stat-strip { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
 @media (max-width: 1180px) { .stat-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 @media (max-width: 520px) { .stat-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .stat-strip .stat { padding: 10px 14px; font-size: 13px; }
 .stat-strip .stat-num { font-size: 20px; }
-.how-it-works summary { cursor: pointer; font-weight: 600; }
-.how-it-works[open] summary { margin-bottom: 8px; }
 th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .btn.danger { background: #d92d20; }
 .btn.busy { opacity: .6; }
@@ -426,7 +423,6 @@ a.kpi:hover { border-color: #c7d2fe; }
 /* upload page: company, drop zone, the list of files, progress */
 .vh { position: absolute !important; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0);
   white-space: nowrap; border: 0; padding: 0; margin: -1px; }
-.field-hint { margin: -4px 0 10px; }
 .drop-zone { border: 2px dashed #c7d2fe; border-radius: var(--radius); background: #fbfcff; padding: 26px 16px;
   text-align: center; display: flex; flex-direction: column; align-items: center; gap: 4px;
   transition: background .15s, border-color .15s; }
@@ -463,8 +459,6 @@ kbd { font: 12px/1 ui-monospace, Consolas, monospace; padding: 2px 5px; border: 
 .upload-msg { min-height: 1.3em; margin: 8px 0 0; font-size: 13px; color: var(--muted); }
 .upload-msg.bad { color: var(--low); }
 .upload-send { margin-top: 8px; width: 100%; padding: 12px; font-size: 15px; }
-.tips { margin: 0; padding-left: 18px; color: var(--text); font-size: 14px; }
-.tips li { margin: 6px 0; }
 .recent-uploads { list-style: none; margin: 0; padding: 0; }
 .recent-uploads li { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; padding: 7px 0; border-bottom: 1px solid var(--border); }
 .recent-uploads li:last-child { border-bottom: 0; }

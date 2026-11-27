@@ -13,23 +13,13 @@
     <div>
       <h1>Dashboard{% if d.company == NO_COMPANY %} · No company{% elif d.company %} · {{ d.company }}{% endif %}
         {%- if d.project == NO_PROJECT %} · No project{% elif d.project %} · {{ d.project }}{% endif %}</h1>
-      <p class="muted small">By invoice date. <strong>Purchases</strong> = bills the company pays,
-        <strong>sales</strong> = bills it raises (money it receives). Rejected invoices and duplicate copies are not
-        counted, and different currencies are never added together.
-        {% if not d.own_companies and d.has_unassigned %}
-          <br><strong>Your companies are not set:</strong> invoices without a company count as purchases, also your
-          sales bills. <a href="{{ url_for('companies', _anchor='own-companies') }}">Set your companies</a> once and
-          every bill counts as a sale or a purchase by itself.
-        {% endif %}
-        {% if d.company and d.company != NO_COMPANY %}
-          {% if d.company_gstin %}{{ d.company }}'s own GSTIN, found from its invoices: {{ d.company_gstin }}.{% endif %}
-          <a href="{{ url_for('invoices', company=d.company) }}">Open its folder</a>
-        {% endif %}
-        {% if d.internal %}
-          <br>{{ d.internal }} bill{{ 's' if d.internal != 1 }} from one of your companies to another
-          {{ 'are' if d.internal != 1 else 'is' }} left out of these totals: that money stays inside your group.
-          Each company's own books still count {{ 'them' if d.internal != 1 else 'it' }} (choose the company above).
-        {% endif %}</p>
+      {% if d.company and d.company != NO_COMPANY %}
+        <p class="muted small">{% if d.company_gstin %}GSTIN {{ d.company_gstin }} · {% endif %}<a href="{{ url_for('invoices', company=d.company) }}">Open folder</a></p>
+      {% endif %}
+      {% if not d.own_companies and d.has_unassigned %}
+        <p class="small"><strong>Your companies are not set.</strong>
+          <a href="{{ url_for('companies', _anchor='own-companies') }}">Set them</a></p>
+      {% endif %}
     </div>
     {% if d.currencies or d.companies %}
     <form class="filters dash-filters" method="get" action="{{ url_for('dashboard') }}">
@@ -81,12 +71,10 @@
 {% if not d.currencies %}
 <section class="card empty">
   {% if d.no_currency %}
-  <p><strong>{{ d.no_currency }} invoice{{ 's' if d.no_currency != 1 }} {{ 'in this company ' if d.company }}without a
-    currency.</strong> Amounts are only added up per currency: open {{ 'them' if d.no_currency != 1 else 'it' }} and set
-    the currency (for example INR).</p>
+  <p><strong>{{ d.no_currency }} invoice{{ 's' if d.no_currency != 1 }} without a currency</strong></p>
   <a class="btn" href="{{ url_for('invoices', company=d.company) if d.company else url_for('invoices') }}">Open the invoices</a>
   {% else %}
-  <p><strong>No processed invoices {{ 'in this company ' if d.company }}yet.</strong> The dashboard fills in as invoices are uploaded.</p>
+  <p><strong>No invoices yet</strong></p>
   <a class="btn" href="{{ url_for('upload_page') }}">Add invoices</a>
   {% endif %}
 </section>
@@ -133,7 +121,7 @@
     <li><span class="swatch credit"></span>Sales</li>
   </ul>
   {% if s.invoices == 0 %}
-    <p class="muted">No {{ cur }} invoices dated in this period. Try another period.</p>
+    <p class="muted">No invoices in this period.</p>
   {% else %}
   <div class="vchart" role="img" aria-label="Purchases and sales by {{ 'year' if d.by_year else 'month' }} in {{ cur }}; the table below has the numbers.">
     <div class="vchart-axis">
@@ -153,12 +141,8 @@
       {% endfor %}
     </div>
   </div>
-  {% if d.undated %}<p class="muted small">{{ d.undated }} {{ cur }} invoice{{ 's' if d.undated != 1 }} without a date
-    {{ 'are' if d.undated != 1 else 'is' }} not in this chart (see the <a href="{{ url_for('invoices', review='1') }}">Review queue</a>).</p>{% endif %}
-  {% if d.no_currency %}<p class="muted small">{{ d.no_currency }} invoice{{ 's' if d.no_currency != 1 }} without a currency
-    {{ 'are' if d.no_currency != 1 else 'is' }} not counted anywhere on this page: open
-    {{ 'them' if d.no_currency != 1 else 'it' }} in the <a href="{{ url_for('invoices', company=d.company) if d.company else url_for('invoices') }}">Invoices</a>
-    list and set the currency.</p>{% endif %}
+  {% if d.undated %}<p class="muted small"><a href="{{ url_for('invoices', review='1') }}">{{ d.undated }} without a date</a></p>{% endif %}
+  {% if d.no_currency %}<p class="muted small"><a href="{{ url_for('invoices', company=d.company) if d.company else url_for('invoices') }}">{{ d.no_currency }} without a currency</a></p>{% endif %}
   <details>
     <summary>Show as a table</summary>
     <div class="table-wrap"><table class="kv">
@@ -218,8 +202,6 @@
     <h2>Project-wise ({{ cur }}, without GST)</h2>
     <a class="small" href="{{ url_for('invoices', project=NO_PROJECT) }}">Bills in no project</a>
   </div>
-  <p class="muted small">Margin = the project's sales − its purchases, both without GST{% if not d.company %};
-    bills between your companies are left out{% endif %}. Click a project to see only its bills on this page.</p>
   {% if d.project_rows %}
   <ul class="viz-legend">
     <li><span class="swatch debit"></span>Purchases</li>
@@ -245,7 +227,7 @@
     <tbody>
       {% for p in d.project_rows %}<tr data-href="{{ url_with('dashboard', project=p.name or NO_PROJECT) }}">
         <td>{{ p.name or 'No project' }}{% if p.no_tax %}<br><span class="muted small">GST not found on {{ p.no_tax }}
-          bill{{ 's' if p.no_tax != 1 }}: the whole total is counted</span>{% endif %}</td>
+          bill{{ 's' if p.no_tax != 1 }}</span>{% endif %}</td>
         <td class="num">{{ p.invoices }}</td>
         <td class="num">{{ p.sales | amount(cur) }}</td><td class="num">{{ p.purchases | amount(cur) }}</td>
         <td class="num">{% if p.name %}{{ p.margin | amount(cur) }}{% if p.margin < 0 %} <span class="badge low">loss</span>{% endif %}{% else %}–{% endif %}</td>
@@ -253,15 +235,13 @@
     </tbody>
   </table></div>
   {% else %}
-    <p class="muted">No {{ cur }} bills dated in this period. Try another period.</p>
+    <p class="muted">No bills in this period.</p>
   {% endif %}
 </section>
 {% else %}
 <section class="card" id="projects">
   <h2>Project-wise</h2>
-  <p class="muted small">No bill is in a project yet. Put bills in a project (on the Add invoices page, on an
-    invoice's page, or select bills in the <a href="{{ url_for('invoices') }}">Invoices</a> list) to see each
-    project's sales, purchases and margin here.</p>
+  <p class="muted">No projects yet.</p>
 </section>
 {% endif %}
 
@@ -297,9 +277,7 @@
       {% endfor %}
     </ul>
     {% else %}
-      <p class="muted">No sales bills in this period. An invoice counts as a sale when its company is the seller
-        (<a href="{{ url_for('companies', _anchor='own-companies') }}">your companies</a>); set it on the invoice page
-        if it was not found.</p>
+      <p class="muted">No sales bills in this period.</p>
     {% endif %}
   </div>
 </section>
@@ -328,15 +306,4 @@
   </table></div>
 </section>
 {% endif %}
-
-<details class="card how-it-works">
-  <summary>How invoices flow through this app</summary>
-  <ol class="steps">
-    <li><strong>Capture</strong>: upload PDFs / photos / ZIPs, import a folder, take a phone photo or paste a copied picture (all on the Add invoices page).</li>
-    <li><strong>Extract</strong>: number, dates, seller, buyer, GSTINs, line items, tax and totals are read automatically.</li>
-    <li><strong>Check</strong>: totals must add up, GSTINs must be valid, CGST must equal SGST, the same invoice must not come twice.</li>
-    <li><strong>Review</strong>: anything doubtful lands in the <a href="{{ url_for('invoices', review='1') }}">Review queue</a>. Correct values, then approve or reject.</li>
-    <li><strong>Export</strong>: the <a href="{{ url_for('data_sheet') }}">Data sheet</a> gives all data as Excel / CSV for accounting.</li>
-  </ol>
-</details>
 {% endblock %}

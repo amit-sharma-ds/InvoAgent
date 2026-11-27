@@ -20,7 +20,7 @@
       <a class="btn secondary" href="{{ url_for('invoices', batch=batch.id) }}">Open in invoice table</a>
     </div>
   {% else %}
-    <p class="muted small">This page refreshes every 3 seconds. You can close it: processing continues in the background.</p>
+    <p class="muted small">Processing…</p>
   {% endif %}
 </section>
 

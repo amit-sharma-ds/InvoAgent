@@ -2,9 +2,6 @@
 {% block content %}
 <section class="card">
   <h1>Companies</h1>
-  <p class="muted small">One folder per company. An invoice goes into the folder picked in the <em>Company</em> box when it
-    is uploaded (Add invoices page); left empty, into the known company whose name or GSTIN it shows.
-    Move invoices on the Invoices page (select rows, <em>Move selected</em>) or on the invoice itself.</p>
   <div class="actions">
     <a class="btn" href="{{ url_for('upload_page') }}">Add invoices to a company</a>
     <a class="btn secondary" href="{{ url_for('dashboard') }}">Company-wise dashboard</a>
@@ -13,11 +10,7 @@
 
 <section class="card" id="own-companies">
   <h2>Your companies</h2>
-  <p class="muted small">The businesses whose bills these are. A bill where one of them is the <strong>seller</strong>
-    counts as a <strong>sale</strong>; where it is the <strong>buyer</strong>, as a <strong>purchase</strong>
-    (a bill from one of them to another is the seller's sale).
-    Every new invoice goes into the folder of the company it names, and saving here moves the invoices without a
-    company there too. One company per line; the GSTIN after the name is optional but surer than the name.</p>
+  <p class="muted small">One per line: name, GSTIN (optional)</p>
   <form class="own-companies-form" method="post" action="{{ url_for('save_own_companies') }}">
     <textarea name="companies" rows="3" aria-label="Your companies, one per line"
               placeholder="Kavya Infotech Pvt Ltd, 06BKXPT4822Q3ZY&#10;OM TRADERS">{{ own_text }}</textarea>
@@ -59,7 +52,7 @@
 </section>
 {% else %}
 <section class="card empty">
-  <p><strong>No invoices yet.</strong> Type a company name in the Company box when you upload; its folder appears here.</p>
+  <p><strong>No invoices yet</strong></p>
   <a class="btn" href="{{ url_for('upload_page') }}">Add invoices</a>
 </section>
 {% endif %}

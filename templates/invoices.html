@@ -6,7 +6,6 @@
   <div class="result-head">
     <div>
       <h1>{{ 'Review queue' if filters.review else 'Invoices' }}</h1>
-      {% if filters.review %}<p class="small">Invoices that need a person to check them (low confidence, failed checks, missing fields or a possible duplicate). Open one, correct it, then approve or reject.</p>{% endif %}
       <p class="muted small">{{ total }} matching · {{ stats.total }} in database ·
         {{ stats.needs_review }} need review · {{ stats.queued + stats.processing }} in queue</p>
     </div>
@@ -56,8 +55,6 @@
 <section class="card">
   <div class="result-head">
     <div>
-      <p class="muted small">Click a row to open the invoice. A grey <span class="null">null</span> means the field
-        was not found. Highlighted rows need a human check.</p>
       <label class="small" hidden><input type="checkbox" data-all-columns="#invoice-table" data-key="list">
         Show all {{ columns | length }} columns</label>
     </div>

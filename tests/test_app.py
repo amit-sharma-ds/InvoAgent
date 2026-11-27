@@ -363,10 +363,15 @@ def test_dashboard(client):
     assert page.status_code == 200 and "Purchases and sales by year" in html and "Top suppliers" in html
     assert "Acme Traders Pvt Ltd" in html and 'class="vbar"' in html and "Sales</li>" in html
     assert "Debit" not in html and "Credit" not in html
-    # what the Overview tab had: the counts of all invoices, the recent invoices, how the app works
+    # what the Overview tab had: the counts of all invoices, the recent invoices
     assert '<span>need review</span>' in html and '<span>possible duplicates</span>' in html
     assert "Recent invoices" in html and "Acme Traders Pvt Ltd<br>" in html
-    assert "How invoices flow through this app" in html
+    # a working app, not a demo: no help texts on how the app works
+    assert "How invoices flow through this app" not in html and "Purchases</strong> = bills" not in html
+    for url in ["/upload", "/data", "/invoices", "/vendors", "/companies"]:
+        page = client.get(url).data.decode("utf-8")
+        assert "For the best results" not in page and "like a spreadsheet" not in page, url
+        assert "Click a row to open" not in page and "One folder per company" not in page, url
     assert client.get("/dashboard?period=fy&currency=XYZ").status_code == 200  # unknown currency: falls back
 
 

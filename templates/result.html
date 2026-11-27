@@ -142,7 +142,6 @@
 
 <details class="card" {% if invoice.needs_review and not invoice.edited %}open{% endif %}>
   <summary>Correct the extracted values</summary>
-  <p class="muted small">Fix anything that was read wrongly, then save. Corrections go to the database, the Data sheet and the exports.</p>
   <form method="post" action="{{ url_for('edit_invoice', invoice_id=invoice.id) }}" class="edit-grid">
     {% for col, label in edit_labels %}
       <label>{{ label }}
@@ -192,7 +191,7 @@
         {% set items_sum = items | map(attribute='amount') | select('number') | sum %}
         <p class="muted small">{{ items | length }} item{{ 's' if items | length != 1 }}{% if items_sum %} · amounts add up to {{ money(items_sum) }}{% endif %}</p>
       {% else %}
-        <p class="muted small">No line-item table was detected.</p>
+        <p class="muted small">No line items found.</p>
       {% endif %}
     </div>
     {% if items %}<button type="button" class="btn secondary" data-drawer="line-items" hidden>Show line items ({{ items | length }})</button>{% endif %}

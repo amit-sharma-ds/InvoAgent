@@ -30,9 +30,6 @@
         <p class="small"><strong>Showing: {{ shown | join(', ') }}</strong> ·
           <a href="{{ url_for('data_sheet') }}">All invoices</a></p>
       {% endif %}
-      <p class="muted small">The invoices in one table, like a spreadsheet: the same rows as the Excel and CSV
-        downloads. <span class="null">null</span> means the field is not on that invoice. Click a column name
-        to sort; "Items" shows the bill's line items at the side.</p>
     </div>
     <div class="actions">
       <a class="btn" href="{{ url_with('export_invoices_xlsx') }}">Download Excel (both sheets)</a>
@@ -52,13 +49,13 @@
   </div>
   <p class="small" id="sheet-summary"></p>
   {% if total_rows > rows | length %}
-    <p class="small muted">Showing the first {{ rows | length }} of {{ total_rows }} invoices. The downloads contain all rows.</p>
+    <p class="small muted">First {{ rows | length }} of {{ total_rows }} shown · downloads have all</p>
   {% endif %}
 </section>
 
 <section class="card sheet-card">
   {% if not rows %}
-    <p class="muted" style="padding: 16px">No invoices yet. Add some on the Add invoices page.</p>
+    <p class="muted" style="padding: 16px">No invoices yet.</p>
   {% endif %}
   <div class="sheet-wrap" id="sheet-invoices"{% if items_first %} hidden{% endif %}>
     <table class="sheet" data-money="subtotal,tax,discount,shipping,total" data-pages>

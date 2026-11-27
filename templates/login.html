@@ -11,7 +11,7 @@
 <main class="login-box">
   <img class="login-logo" src="{{ url_for('static', filename='logo.svg') }}" alt="" width="56" height="56">
   <h1>InvoAgent</h1>
-  <p class="muted small">Invoice data from PDFs, scans and phone photos. Sign in to continue.</p>
+  <p class="muted small">Sign in to continue</p>
   {% with messages = get_flashed_messages() %}
     {% if messages %}<div class="alert">{% for m in messages %}<p>{{ m }}</p>{% endfor %}</div>{% endif %}
   {% endwith %}

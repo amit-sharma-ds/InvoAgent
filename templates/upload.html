@@ -3,23 +3,15 @@
 {% block content %}
 <section class="card">
   <h1>Add invoices</h1>
-  <p class="muted">Take a phone photo, paste a copied picture, or add PDFs, photos, a ZIP or a whole folder.
-    A pasted picture is read straight away; one invoice shows its result right away, more are read in the
-    background.</p>
 
   <form id="uploader" method="post" action="{{ url_for('upload') }}" enctype="multipart/form-data"
         data-max-mb="{{ max_mb }}">
     <label class="company-field">Company (folder)
       {{ company_input(current_company, id='upload-company') }}
     </label>
-    <p class="muted small field-hint">The invoices are kept in this company's folder on the
-      <a href="{{ url_for('companies') }}">Companies</a> page. Left empty, each invoice goes to the known company
-      whose name or GSTIN it shows.</p>
-    <label class="company-field">Project
+    <label class="company-field">Project <span class="muted small">(optional)</span>
       {{ project_input(current_project, id='upload-project') }}
     </label>
-    <p class="muted small field-hint">Optional: the project these bills are for (purchases and sales). The
-      Dashboard shows each project's sales, purchases and margin. Left empty, the bills are in no project.</p>
 
     <div class="drop-zone" id="drop-zone">
       <svg class="drop-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V4m0 0L7.5 8.5M12 4l4.5 4.5M4 14v3.5A2.5 2.5 0 0 0 6.5 20h11a2.5 2.5 0 0 0 2.5-2.5V14"/></svg>
@@ -40,9 +32,7 @@
       <svg class="phone-camera-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8.5A2.5 2.5 0 0 1 6.5 6h1.6l1.4-2h5l1.4 2h1.6A2.5 2.5 0 0 1 20 8.5v8a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 16.5z"/><circle cx="12" cy="12.5" r="3.5"/></svg>
       <div class="phone-camera-text">
         <strong>Phone camera</strong>
-        <p class="muted small" data-phone="Take a photo of each bill with this phone's camera; every photo is listed below. Full camera resolution, so this gives the best accuracy.">Open
-          this page on your phone and tap <em>Take photo</em>: the phone's camera opens in the browser, no app
-          needed. Full camera resolution, so this gives the best accuracy.</p>
+        <p class="muted small" data-phone="One photo per bill.">On a phone: <em>Take photo</em> opens the camera.</p>
       </div>
       <label class="btn secondary" for="pick-photo" id="photo-label">Take photo</label>
     </div>
@@ -60,20 +50,7 @@
   </form>
 </section>
 
-<section class="grid-2">
-  <div class="card">
-    <h2>For the best results</h2>
-    <ul class="tips">
-      <li><strong>Phone photo:</strong> paper flat, good light, no shadow, all four edges in the picture. Take
-        several photos one after another; they are all listed before uploading.</li>
-      <li>One invoice per photo or PDF (a PDF may have several pages).</li>
-      <li>Pick the company first: the invoices go straight into its folder. Choosing a folder whose name is the
-        company fills the box for you.</li>
-      <li>The same file is never read twice, and a second copy of a saved invoice is marked as a duplicate.</li>
-      <li>Thousands of files: use the <a href="{{ url_for('scanner') }}">Scanner</a> folder or the folder import
-        command (see README).</li>
-    </ul>
-  </div>
+<section>
   <div class="card">
     <h2>Recent uploads</h2>
     {% if recent %}
