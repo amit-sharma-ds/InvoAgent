@@ -613,6 +613,7 @@ Real invoices often leave out the labels a parser would look for. These cases ar
 | Item table over two or more pages (`continued ...`, the head printed again on page 2) | The rows go on after the repeated column titles; the repeated head (parties, GSTINs) is skipped and does not end the table |
 | The items' sum printed under them without a label (Tally) | Not an item: it ends the table and is the subtotal (also when the total was rounded off) |
 | The end of the address (`... Phase no 2`) and the invoice number below `Invoice No.` read as one cell | Only the words under the label are the number |
+| `Invoice No.` beside another heading (`e-Way Bill No. Dated`), the number (`OJ/2026-27/019`) below it | The heading beside the label has no number: the number is read under the label. The `No.` of `Sl / No.` over the item table is not an invoice-number label |
 
 Tested on 200 invoices in the SuperStore layout (all fields 200/200) and 40 scan / phone-photo versions of them.
 

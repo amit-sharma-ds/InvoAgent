@@ -207,9 +207,11 @@ def collect_candidates(lines, matcher, skip_lines=()):
         label_lines.add(ln.index)
         label_cells.add((ln.index, k))
 
-    for ln in lines:
+    for i, ln in enumerate(lines):
         if ln.index in skip_lines or is_table_header(ln):
             continue
+        # the line right under the item table's column titles: 'Sl / No.' printed over two lines
+        under_titles = i > 0 and lines[i - 1].page == ln.page and is_table_header(lines[i - 1])
         cells = ln.cells()
         for k, cell in enumerate(cells):
             if _IN_WORDS_RE.search(cell):
@@ -249,6 +251,8 @@ def collect_candidates(lines, matcher, skip_lines=()):
                     if mt and normalize_label(label) == "no" and not re.match(r"[\s.:#_-]*(\d|$)",
                                                                              " ".join(words[n:])):
                         mt = None  # "No." is a label when a number (or nothing) follows, not "No. of boxes"
+                    if mt and normalize_label(label) == "no" and under_titles:
+                        mt = None  # the 'No.' of 'Sl / No.': the serial numbers below it are not the invoice's
                     # a misread label on a photo ('Involce No. | 15') counts when it is the whole cell and a
                     # number follows in the next one
                     misread = (mt is not None and mt.method == "fuzzy" and mt.score >= 0.9 and n == len(words)
@@ -400,7 +404,7 @@ def _amount_same_row(c, lines, label_lines=frozenset()):
 
 
 def _part_under(cell, label_cell):
-    """A cell that reaches in from the column on the left ('... Estate no 1 TSY/2026-27/014': an address
+    """A cell that reaches in from the column on the left ('... Estate no 1 OJ/2026-27/014': an address
     and the number below 'Invoice No.' read as one cell in a small photo): only its words under the label.
     A word that ends before the label starts is the address's ('... Phase no 2' just left of the number)."""
     if cell.x0 >= label_cell.x0 - 0.05 or not cell.words:
@@ -445,6 +449,10 @@ def _values_below(lines, c, label_cells, max_lines=4):
 def _resolve(c, lines, label_lines, kind, day_first=None, label_cells=frozenset()):
     if c.value:
         sources = [(c.value, 1.0)]
+        if kind == "ident" and not c.explicit:
+            # 'Invoice No. | e-Way Bill No. Dated': the box beside the label is another heading with no
+            # number in it; boxed layouts (Tally) print the number under its label
+            sources += [(text, 0.95) for text in _values_below(lines, c, label_cells)]
     else:  # the value sits under the label (same column), just right of it lower down, or on the next line
         sources = [(text, 0.95) for text in _values_below(lines, c, label_cells)]
         nxt = _next_line(lines, label_lines, c.line_idx, c.page)

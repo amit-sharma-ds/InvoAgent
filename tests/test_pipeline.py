@@ -465,17 +465,17 @@ def test_a_small_photo_of_a_boxed_header():
         line(0, 0.03, cell(("Tax", 0.40, 0.44), ("Invoice", 0.45, 0.52))),
         line(1, 0.07, cell(("OAKWOOD", 0.07, 0.15), ("JOINERY", 0.16, 0.24)),
              cell(("voice", 0.503, 0.542), ("No.", 0.551, 0.576))),
-        line(2, 0.08, cell(("Plot", 0.07, 0.10), ("no", 0.11, 0.13), ("S-28,", 0.14, 0.18), ("Estate", 0.39, 0.44),
+        line(2, 0.08, cell(("Shop", 0.07, 0.10), ("no", 0.11, 0.13), ("B-14,", 0.14, 0.18), ("Phase", 0.39, 0.44),
                            ("no", 0.449, 0.462), ("1", 0.474, 0.481), ("OJ/2026-27/014", 0.499, 0.633)),
              cell(("2-Sep-26", 0.699, 0.774))),
-        line(3, 0.10, cell(("Faridabad,", 0.07, 0.15), ("Haryana", 0.16, 0.22)),
+        line(3, 0.10, cell(("Rohtak,", 0.07, 0.15), ("Haryana", 0.16, 0.22)),
              cell(("Delivery", 0.48, 0.54), ("Note", 0.55, 0.59))),
         line(4, 0.13, cell(("Dispatch", 0.48, 0.55), ("Doc", 0.56, 0.59)),
              cell(("Delivery", 0.70, 0.76), ("Note", 0.77, 0.80), ("Date", 0.81, 0.84))),
         line(5, 0.15, cell(("5-Sep-26", 0.70, 0.77))),
     ]
     fields = extract_invoice(lines, LabelMatcher(use_embeddings=False))["fields"]
-    assert fields["invoice_number"]["value"] == "OJ/2026-27/014"  # not 'S-28' or '1' of the address
+    assert fields["invoice_number"]["value"] == "OJ/2026-27/014"  # not 'B-14' or '1' of the address
     assert fields["invoice_date"]["value"] == "2026-09-02"  # not the delivery note date below
 
 
@@ -550,6 +550,46 @@ def test_an_invoice_over_two_pages():
     # the taxable value is the items' sum printed below them, not total - tax (which holds the round-off)
     assert (fields["subtotal"], fields["tax"], fields["total"]) == (46999.75, 8459.96, 55460.0)
     assert result["checks"]["line_items_sum_equals_subtotal"] is True
+
+
+def test_the_invoice_number_under_its_label_beside_another_heading():
+    """Tally: 'Invoice No.' and 'e-Way Bill No. Dated' side by side, the number (letters and figures)
+    under 'Invoice No.'. The heading beside the label is not its value: the number is read below the label,
+    and the '1' below the 'No.' of the item table's 'Sl / No.' is never the invoice number."""
+    from invoice_parser.extract import extract_invoice
+    from invoice_parser.layout import Cell, Line
+
+    def cell(*words):  # (text, x0, x1) of each word
+        return Cell(" ".join(w[0] for w in words), words[0][1], words[-1][2], list(words))
+
+    def read(with_label):
+        rows = [
+            [cell(("Tax", 0.40, 0.44), ("Invoice", 0.45, 0.51))],
+            [cell(("OAKWOOD", 0.06, 0.13), ("JOINERY", 0.135, 0.20))]
+            + ([cell(("Invoice", 0.464, 0.51), ("No.", 0.519, 0.541))] if with_label else [])
+            + [cell(("e-Way", 0.568, 0.606), ("Bill", 0.609, 0.628), ("No.", 0.631, 0.65), ("Dated", 0.657, 0.699))],
+            [cell(("Shop", 0.065, 0.10), ("7,", 0.105, 0.12), ("Phase", 0.371, 0.417), ("no", 0.42, 0.435),
+                  ("1", 0.443, 0.451), ("OJ/2026-27/019", 0.461, 0.55)),
+             cell(("21-Nov-26", 0.656, 0.74))],
+            [cell(("Sector", 0.07, 0.12), ("9,", 0.125, 0.14), ("Rohtak", 0.145, 0.20))],
+            [cell(("SI", 0.07, 0.08)), cell(("Description", 0.17, 0.24), ("of", 0.245, 0.26), ("Goods", 0.265, 0.31)),
+             cell(("HSN/SAC", 0.41, 0.47)), cell(("Quantity", 0.50, 0.55)), cell(("Rate", 0.59, 0.62)),
+             cell(("per", 0.65, 0.67), ("Disc.%", 0.68, 0.73)), cell(("Amount", 0.76, 0.82))],
+            [cell(("No.", 0.07, 0.08))],  # the second line of 'Sl / No.'
+            [cell(("1", 0.07, 0.075), ("Teak", 0.08, 0.12), ("Chair", 0.125, 0.17)), cell(("9403", 0.40, 0.44)),
+             cell(("12", 0.50, 0.52), ("NOS", 0.525, 0.55)), cell(("6,200.00", 0.59, 0.64)),
+             cell(("74,400.00", 0.76, 0.84))],
+            [cell(("Total", 0.36, 0.40)), cell(("12", 0.50, 0.52), ("NOS", 0.525, 0.56)),
+             cell(("74,400.00", 0.76, 0.84))],
+        ]
+        lines = []
+        for k, cells in enumerate(rows):
+            y = 0.02 + 0.03 * k
+            lines.append(Line(k, 0, "  ".join(c.text for c in cells), y, y + 0.016, 0.95, cell_boxes=cells))
+        return extract_invoice(lines, LabelMatcher(use_embeddings=False))["fields"]["invoice_number"]
+
+    assert read(with_label=True)["value"] == "OJ/2026-27/019"
+    assert (read(with_label=False) or {}).get("value") != "1"  # the serial number of the first item
 
 
 def test_a_misread_name_of_your_company_is_set_to_the_name_you_typed():
