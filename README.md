@@ -65,13 +65,23 @@ Every page has a **left sidebar** with one tab per job, so new features always g
 | **Add invoices** | One place for everything: pick the company, then drop or choose PDFs, photos, a ZIP or a whole folder, take photos with the phone camera, or paste a copied picture (Ctrl+V, read straight away). The files are listed (thumbnail, size, remove) before they are sent with a progress bar; one invoice opens at once, more go to a background batch |
 | **Invoices** | Search and filter all invoices (company, project, status, review status, needs review), move the selected ones to a company or a project, Excel / CSV export |
 | **Review queue** | Only the invoices a person must check: low confidence, failed checks, missing fields or a possible duplicate |
-| **Data sheet** | Spreadsheet view of all invoices and line items, sort, filter, totals per currency, Excel / CSV |
+| **Data sheet** | Spreadsheet view of all invoices and line items, sort, filter, totals per currency, Excel / CSV. **N items** in an invoice's row shows its line items in a side panel |
 | **Vendors** | Every seller with GSTIN, invoice count, total billed and last invoice date |
 
 On a narrow screen (phone) the sidebar becomes a scrollable tab bar at the top.
 
 In every table a click anywhere on a row opens that invoice (Ctrl-click: new tab). Every invoice page has a
 **Back** button that returns to the list you came from, with its search and filters.
+
+Long tables come in pages of 20 rows (**Rows per page**: 10, 20, 50 or 100; **Previous** / **Next** below the
+table). The Invoices list and the Data sheet show their main columns; **Show all columns** adds the others. A
+wide table also has a scroll bar above it, so it scrolls sideways without going down to its end.
+
+An invoice page shows the invoice details, amounts, seller and buyer as short labelled lists; a value the app
+is not sure of has a **check** mark (where it was read from shows on the value). The notes on what to check
+(a value worked out or corrected, a field not found) are folded into one line, **N things to check before you
+approve**. **Show line items** opens the items in a side panel. How the file was read (text, label matching,
+time taken) is under **Technical details** at the end.
 
 **Deleting:** the invoice page has a **Delete** button, and the Invoices list has check boxes with
 **Delete selected**. Both ask for confirmation. Deleting removes the database row, its line items and the

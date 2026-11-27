@@ -1,13 +1,15 @@
 {% extends "base.html" %}
 
-{% macro cell(c, v, invoice_link=False) -%}
-<td class="{% if v is number and c not in yes_no_columns %}num{% endif %}" data-v="{{ '' if v is none else v }}"
+{% macro cell(c, v, invoice_link=False, extra=False) -%}
+<td class="{% if v is number and c not in yes_no_columns %}num{% endif %}{% if extra %} extra{% endif %}" data-v="{{ '' if v is none else v }}"
     {%- if v is string and v | length > 30 %} title="{{ v }}"{% endif %}>
   {%- if invoice_link and v is not none -%}<a href="{{ url_for('invoice_detail', invoice_id=v) }}">{{ v }}</a>
   {%- elif v is none -%}<span class="null">null</span>
   {%- elif c in money_columns -%}{{ "{:,.2f}".format(v) }}
+  {%- elif c == 'quantity' and v is number and v == v | int -%}{{ v | int }}
   {%- elif c in yes_no_columns -%}{{ 'yes' if v else 'no' }}
   {%- elif c == 'overall_confidence' -%}{{ (v * 100) | round | int }}%
+  {%- elif c == 'review_status' -%}<span class="status {{ v }}">{{ v }}</span>
   {%- else -%}{{ v }}{%- endif -%}
 </td>
 {%- endmacro %}
@@ -29,8 +31,8 @@
           <a href="{{ url_for('data_sheet') }}">All invoices</a></p>
       {% endif %}
       <p class="muted small">The invoices in one table, like a spreadsheet: the same rows as the Excel and CSV
-        downloads. Every invoice has the same columns; <span class="null">null</span> means the field is not on
-        that invoice. Click a column name to sort.</p>
+        downloads. <span class="null">null</span> means the field is not on that invoice. Click a column name
+        to sort; "Items" shows the bill's line items at the side.</p>
     </div>
     <div class="actions">
       <a class="btn" href="{{ url_with('export_invoices_xlsx') }}">Download Excel (both sheets)</a>
@@ -45,6 +47,8 @@
     </div>
     <input type="search" id="sheet-filter" placeholder="Filter: seller, GSTIN, invoice no, file name, any text...">
     <label class="small"><input type="checkbox" id="sheet-review"> Needs review only</label>
+    <label class="small" hidden><input type="checkbox" data-all-columns="#sheet-invoices table" data-key="sheet">
+      Show all {{ columns | length }} columns</label>
   </div>
   <p class="small" id="sheet-summary"></p>
   {% if total_rows > rows | length %}
@@ -57,23 +61,38 @@
     <p class="muted" style="padding: 16px">No invoices yet. Add some on the Add invoices page.</p>
   {% endif %}
   <div class="sheet-wrap" id="sheet-invoices"{% if items_first %} hidden{% endif %}>
-    <table class="sheet" data-money="subtotal,tax,discount,shipping,total">
-      <thead><tr>{% for c in columns %}<th data-col="{{ c }}">{{ c }}</th>{% endfor %}</tr></thead>
+    <table class="sheet" data-money="subtotal,tax,discount,shipping,total" data-pages>
+      <thead><tr>
+        {% for c in columns %}
+          <th data-col="{{ c }}"{% if c not in main_columns %} class="extra"{% endif %}>{{ c.replace('_', ' ') }}</th>
+          {% if loop.first %}<th data-col="items">items</th>{% endif %}
+        {% endfor %}
+      </tr></thead>
       <tbody>
         {% for r in rows %}
           <tr data-review="{{ r.needs_review or 0 }}" data-currency="{{ r.currency or '' }}" data-href="{{ url_for('invoice_detail', invoice_id=r.id) }}">
-            {% for c in columns %}{{ cell(c, r[c], c == 'id') }}{% endfor %}
+            {% for c in columns %}
+              {{ cell(c, r[c], c == 'id', c not in main_columns) }}
+              {% if loop.first %}
+                <td data-v="{{ r.line_item_count or 0 }}">
+                  {%- if r.line_item_count -%}
+                    <a class="items-link" href="{{ url_for('invoice_detail', invoice_id=r.id) }}#line-items" data-items="{{ r.id }}">
+                      {{- r.line_item_count }} item{{ 's' if r.line_item_count != 1 }}</a>
+                  {%- else -%}<span class="null">none</span>{%- endif -%}
+                </td>
+              {% endif %}
+            {% endfor %}
           </tr>
         {% endfor %}
       </tbody>
     </table>
   </div>
   <div class="sheet-wrap" id="sheet-items"{% if not items_first %} hidden{% endif %}>
-    <table class="sheet" data-money="amount">
-      <thead><tr>{% for c in item_columns %}<th data-col="{{ c }}">{{ c }}</th>{% endfor %}</tr></thead>
+    <table class="sheet" data-money="amount" data-pages>
+      <thead><tr>{% for c in item_columns %}<th data-col="{{ c }}">{{ c.replace('_', ' ') }}</th>{% endfor %}</tr></thead>
       <tbody>
         {% for r in items %}
-          <tr data-currency="{{ r.currency or '' }}" data-href="{{ url_for('invoice_detail', invoice_id=r.invoice_id) }}">
+          <tr data-currency="{{ r.currency or '' }}" data-invoice="{{ r.invoice_id }}" data-href="{{ url_for('invoice_detail', invoice_id=r.invoice_id) }}">
             {% for c in item_columns %}{{ cell(c, r[c], c == 'invoice_id') }}{% endfor %}
           </tr>
         {% endfor %}
@@ -81,4 +100,15 @@
     </table>
   </div>
 </section>
+
+<aside class="drawer" id="sheet-drawer" tabindex="-1" aria-labelledby="sheet-drawer-title" hidden>
+  <div class="drawer-head">
+    <div>
+      <h2 id="sheet-drawer-title">Line items</h2>
+      <p class="muted small" id="sheet-drawer-sub"></p>
+    </div>
+    <button type="button" class="drawer-close" aria-label="Close">&times;</button>
+  </div>
+  <div class="drawer-body" id="sheet-drawer-body"></div>
+</aside>
 {% endblock %}

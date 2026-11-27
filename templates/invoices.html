@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "_company.html" import company_input, project_input with context %}
+{% from "_pager.html" import pager with context %}
 {% block content %}
 <section class="card">
   <div class="result-head">
@@ -54,8 +55,12 @@
 
 <section class="card">
   <div class="result-head">
-    <p class="muted small">Click a row to open the invoice. Every invoice has the same columns; a grey
-      <span class="null">null</span> means the field was not found. Highlighted rows need a human check.</p>
+    <div>
+      <p class="muted small">Click a row to open the invoice. A grey <span class="null">null</span> means the field
+        was not found. Highlighted rows need a human check.</p>
+      <label class="small" hidden><input type="checkbox" data-all-columns="#invoice-table" data-key="list">
+        Show all {{ columns | length }} columns</label>
+    </div>
     <form id="bulk-delete" class="bulk-actions" method="post" action="{{ url_for('delete_invoices') }}"
           data-confirm="Delete the selected invoices and their files? This cannot be undone.">
       {{ company_input('', id='move-company', placeholder='Company to move to') }}
@@ -68,16 +73,16 @@
     </form>
   </div>
   <div class="table-wrap">
-    <table class="data">
+    <table class="data" id="invoice-table">
       <thead><tr><th class="pick"><input type="checkbox" id="pick-all" title="Select all on this page" aria-label="Select all on this page"></th>
-        {% for c in columns %}<th>{{ c.replace('_', ' ') }}</th>{% endfor %}</tr></thead>
+        {% for c in columns %}<th class="{% if c in money_columns %}num{% endif %}{% if c not in main_columns %} extra{% endif %}">{{ c.replace('_', ' ') }}</th>{% endfor %}</tr></thead>
       <tbody>
         {% for r in rows %}
-          <tr class="{% if r.needs_review %}review{% endif %}" data-href="{{ url_for('invoice_detail', invoice_id=r.id) }}">
+          <tr class="{% if r.needs_review %}review{% endif %}{% if loop.index is even %} alt{% endif %}" data-href="{{ url_for('invoice_detail', invoice_id=r.id) }}">
             <td class="pick"><input type="checkbox" name="ids" value="{{ r.id }}" form="bulk-delete" aria-label="Select invoice {{ r.id }}"></td>
             {% for c in columns %}
               {% set v = r[c] %}
-              <td class="{% if c in money_columns %}num{% endif %}">
+              <td class="{% if c in money_columns %}num{% endif %}{% if c not in main_columns %} extra{% endif %}">
                 {%- if c == 'id' -%}<a href="{{ url_for('invoice_detail', invoice_id=v) }}">{{ v }}</a>
                 {%- elif v is none -%}<span class="null">null</span>
                 {%- elif c in money_columns -%}{{ "{:,.2f}".format(v) }}
@@ -95,12 +100,6 @@
       </tbody>
     </table>
   </div>
-  {% if pages > 1 %}
-    <div class="pager">
-      {% if page > 1 %}<a href="{{ url_with('invoices', page=page - 1) }}">&larr; Previous</a>{% endif %}
-      <span class="muted small">Page {{ page }} of {{ pages }}</span>
-      {% if page < pages %}<a href="{{ url_with('invoices', page=page + 1) }}">Next &rarr;</a>{% endif %}
-    </div>
-  {% endif %}
+  {% if total > page_sizes[0] %}{{ pager('invoices', page, pages, total, per, page_sizes) }}{% endif %}
 </section>
 {% endblock %}

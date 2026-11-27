@@ -60,9 +60,16 @@ PORT = int(os.environ.get("INVOICE_PARSER_PORT") or os.environ.get("PORT") or "5
 ALLOWED_EXTENSIONS = config.PDF_EXTENSIONS | config.IMAGE_EXTENSIONS
 MAX_ZIP_MEMBER = 50 * 1024 * 1024        # skip single files above 50 MB inside a ZIP
 MAX_ZIP_TOTAL = 2 * 1024 * 1024 * 1024   # stop unpacking after 2 GB (ZIP-bomb guard)
-PAGE_SIZE = 50
+PAGE_SIZE = 20  # rows on one page of a list; Rows per page chooses another of PAGE_SIZES
+PAGE_SIZES = (10, 20, 50, 100)
 SHEET_ROW_LIMIT = 5000  # rows shown in the browser; the Excel / CSV downloads always have everything
 MONEY_COLUMNS = {"subtotal", "tax", "discount", "shipping", "total"}
+# Wide tables show these columns first; "Show all columns" adds the others
+LIST_MAIN_COLUMNS = {"id", "file_name", "company", "status", "review_status", "duplicate_of", "invoice_number",
+                     "invoice_date", "seller_name", "buyer_name", "currency", "total"}
+SHEET_MAIN_COLUMNS = {"id", "file_name", "company", "entry_type", "review_status", "invoice_number", "invoice_date",
+                      "seller_name", "seller_tax_id", "buyer_name", "buyer_tax_id", "currency", "subtotal", "tax",
+                      "total"}
 EDIT_LABELS = [("invoice_number", "Invoice number"), ("invoice_date", "Invoice date"), ("due_date", "Due date"),
                ("po_number", "PO number"), ("currency", "Currency"), ("seller_name", "Seller name"),
                ("seller_tax_id", "Seller GSTIN / tax ID"), ("buyer_name", "Buyer name"),
@@ -340,11 +347,17 @@ def upload():
 @app.get("/invoices")
 def invoices():
     filters = _filters()
-    page = max(1, request.args.get("page", 1, type=int))
-    total, rows = store().search(**filters, limit=PAGE_SIZE, offset=(page - 1) * PAGE_SIZE)
+    per = request.args.get("per", type=int)
+    per = per if per in PAGE_SIZES else PAGE_SIZE
+    page =max(1, request.args.get("page", 1, type=int))
+    total, rows = store().search(**filters, limit=per, offset=(page - 1) * per)
+    pages = max(1, -(-total // per))
+    if page > pages:  # fewer rows now (e.g. more rows per page): the last page
+        page = pages
+        total, rows = store().search(**filters, limit=per, offset=(page - 1) * per)
     return render_template("invoices.html", companies=store().company_names(), projects=store().project_names(),
-                           rows=rows, columns=TABLE_COLUMNS, total=total, page=page,
-                           pages=max(1, -(-total // PAGE_SIZE)), filters=filters, stats=store().stats(),
+                           rows=rows, columns=TABLE_COLUMNS, total=total, page=page, per=per, page_sizes=PAGE_SIZES,
+                           pages=pages, filters=filters, stats=store().stats(), main_columns=LIST_MAIN_COLUMNS,
                            statuses=STATUSES, review_statuses=REVIEW_STATUSES, money_columns=MONEY_COLUMNS)
 
 
@@ -358,9 +371,23 @@ def data_sheet():
     items = store().export_line_items(**filters)
     return render_template("data.html", rows=rows[:SHEET_ROW_LIMIT], items=items[:SHEET_ROW_LIMIT * 5],
                            total_rows=len(rows), total_items=len(items), columns=EXPORT_COLUMNS,
+                           main_columns=SHEET_MAIN_COLUMNS,
                            item_columns=ITEM_COLUMNS, money_columns=MONEY_COLUMNS | {"unit_price", "amount"},
                            yes_no_columns={"needs_review", "totals_ok", "line_items_ok", "edited"},
                            filters=filters, items_first=request.args.get("sheet") == "items")
+
+
+_MISREAD_NUMBER = r"-?\d{1,3}(?:,\d{3}){4,}(?:\.\d+)?"  # 1,000,000,000,000 or more: a misreading, not an amount
+
+
+@app.template_filter("short_note")
+def short_note(note):
+    """A note on an invoice as the page shows it: a misread number of 13 digits or more is not repeated
+    ('Total was read as 271,000,008,...,656.00 and corrected to 236,000.00' -> 'Total was misread and
+    corrected to 236,000.00'), and the 'please check' at its end is left out (the box above the notes says so)."""
+    text = re.sub(rf"\bwas read as {_MISREAD_NUMBER}", "was misread", note or "")
+    text = re.sub(r"[.:;,]?\s*please check(?: it| them)?\.?\s*$", "", text, flags=re.IGNORECASE).rstrip()
+    return text + "." if text and text[-1] not in ".)!?" else text
 
 
 @app.template_filter("amount")

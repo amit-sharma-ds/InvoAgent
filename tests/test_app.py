@@ -135,6 +135,63 @@ def test_data_sheet_shows_all_invoices_and_line_items(client):
     assert "seller_tax_id" in html and "buyer_tax_id" in html  # every export column is there
 
 
+def test_long_lists_come_in_pages(client):
+    """Invoices: 20 rows a page, Rows per page 10 / 20 / 50 / 100 with the filters kept, a page past the end
+    shows the last page. The Data sheet, Vendors and batch tables are paged in the browser (data-pages)."""
+    store = app_module.store()
+    added = [_upload(client, _to_pdf(_colon_layout) + f"%paged {n}".encode(), f"paged{n}.pdf")
+             for n in range(max(0, 12 - store.stats()["total"]))]
+    try:
+        total = store.stats()["total"]
+        page = client.get("/invoices").data.decode("utf-8")
+        assert page.count('name="ids"') == min(20, total) and f" of {total}</span>" in page
+        assert '<option value="20" selected>' in page and 'name="per"' in page
+        pages = -(-total // 10)
+        last = client.get("/invoices?per=10&page=999&q=").data.decode("utf-8")
+        assert f"Page {pages} of {pages}" in last and '<option value="10" selected>' in last
+        assert last.count('name="ids"') == total - 10 * (pages - 1)
+        assert '<input type="hidden" name="q" value="">' in last  # the filters stay when Rows per page changes
+        assert '<option value="20" selected>' in client.get("/invoices?per=7").data.decode("utf-8")  # not offered
+        for url in ["/data", "/vendors"]:
+            assert "data-pages" in client.get(url).data.decode("utf-8"), url
+    finally:
+        store.delete(added)
+
+
+def test_line_items_open_at_the_side_and_notes_are_folded(client):
+    """Line items: a button on the invoice page and 'N items' in a Data sheet row open them in a side panel
+    (without the script the invoice page shows them in place). Notes on an invoice are folded."""
+    first = _upload(client, _to_pdf(_colon_layout) + b"%side 1", "side1.pdf")
+    second = _upload(client, _to_pdf(_colon_layout) + b"%side 2", "side2.pdf")  # a possible duplicate: a note
+    page = client.get(f"/invoices/{second}").data.decode("utf-8")
+    assert 'data-drawer="line-items"' in page and '<aside class="drawer" id="line-items"' in page
+    assert "Laptop Stand" in page and "Total of the items" in page
+    assert '<details class="notes">' in page and "to check before you approve</summary>" in page
+    assert "processed in" not in page.split("Technical details")[0]  # with the technical details at the end
+    sheet = client.get("/data").data.decode("utf-8")
+    assert f'data-items="{second}"' in sheet and f'data-invoice="{second}"' in sheet and 'id="sheet-drawer"' in sheet
+    assert f'href="/invoices/{second}#line-items"' in sheet  # without the script: the invoice page's items
+    assert 'data-all-columns="#sheet-invoices table"' in sheet and 'class="extra"' in sheet
+    app_module.store().delete([first, second])
+
+
+def test_notes_on_an_invoice_are_short():
+    short = app_module.short_note
+    assert short("Total was read as 271,000,008,513,000,227,004,118,656.00 and corrected to 236,000.00: the amount "
+                 "in words says so. Please check.") == ("Total was misread and corrected to 236,000.00: the amount "
+                                                        "in words says so.")
+    assert short("Seller was inferred (no 'Seller/Vendor' label): please check it.") == \
+        "Seller was inferred (no 'Seller/Vendor' label)"
+    assert short("Subtotal could not be read; the line items give 200,000.00. Please check.") == \
+        "Subtotal could not be read; the line items give 200,000.00."
+    assert short("SGST was read as 22,600.00 and corrected to 22,500.00: CGST says so. Please check.") == \
+        "SGST was read as 22,600.00 and corrected to 22,500.00: CGST says so."  # a real amount is kept
+    assert short("Words read unclearly were set to their common spelling (Buyer address: Naggr → Nagar): "
+                 "please check them.") == ("Words read unclearly were set to their common spelling (Buyer address: "
+                                           "Naggr → Nagar)")
+    assert short("Could not find invoice date.") == "Could not find invoice date."
+
+
 def test_api_parse_and_list(client):
     resp = client.post("/api/parse", data={"file": (io.BytesIO(_to_pdf(_colon_layout)), "inv.pdf")},
                        content_type="multipart/form-data")

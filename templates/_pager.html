@@ -1,0 +1,22 @@
+{# Pages of a list read from the server: "1–20 of 57", Previous / Next, Rows per page. The filters stay. #}
+{% macro pager(endpoint, page, pages, total, per, sizes) -%}
+<div class="pager">
+  <span class="muted small">{% if total %}{{ (page - 1) * per + 1 }}–{{ [page * per, total] | min }} of {{ total }}{% else %}No rows{% endif %}</span>
+  <span class="pager-nav">
+    {% if page > 1 %}<a class="btn secondary" href="{{ url_with(endpoint, page=page - 1) }}">&larr; Previous</a>
+    {% else %}<span class="btn secondary off" aria-disabled="true">&larr; Previous</span>{% endif %}
+    <span class="small">Page {{ page }} of {{ pages }}</span>
+    {% if page < pages %}<a class="btn secondary" href="{{ url_with(endpoint, page=page + 1) }}">Next &rarr;</a>
+    {% else %}<span class="btn secondary off" aria-disabled="true">Next &rarr;</span>{% endif %}
+  </span>
+  <form class="pager-size" method="get" action="{{ url_for(endpoint) }}">
+    {% for k, v in request.args.items(multi=True) if k not in ('page', 'per') %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+    <label class="small muted">Rows per page
+      <select name="per" data-autosubmit>
+        {% for n in sizes %}<option value="{{ n }}" {% if n == per %}selected{% endif %}>{{ n }}</option>{% endfor %}
+      </select>
+    </label>
+    <noscript><button class="btn secondary" type="submit">Show</button></noscript>
+  </form>
+</div>
+{%- endmacro %}

@@ -52,6 +52,191 @@
     });
   });
 
+  const saved = {  // small choices remembered in this browser (rows per page, all columns)
+    get(key) { try { return localStorage.getItem(key); } catch (e) { return null; } },
+    set(key, value) { try { localStorage.setItem(key, value); } catch (e) { /* private window */ } },
+  };
+
+  // Long tables (data-pages): one page of rows at a time, "1–20 of 57", Previous / Next and Rows per page
+  // below the table. Rows a filter leaves out have data-out="1".
+  const PAGE_SIZES = [10, 20, 50, 100];
+  const pagers = new Map();
+  document.querySelectorAll("table[data-pages]").forEach((table) => {
+    const body = table.tBodies[0];
+    if (!body) return;
+    const wrap = table.closest(".sheet-wrap, .table-wrap") || table;
+    const make = (tag, cls, text) => { const el = document.createElement(tag); el.className = cls; if (text) el.textContent = text; return el; };
+    const bar = make("div", "pager");
+    const info = make("span", "muted small");
+    const nav = make("span", "pager-nav");
+    const prev = make("button", "btn secondary", "← Previous");
+    const where = make("span", "small");
+    const next = make("button", "btn secondary", "Next →");
+    prev.type = next.type = "button";
+    nav.append(prev, where, next);
+    const label = make("label", "small muted", "Rows per page ");
+    const sizeBox = document.createElement("select");
+    PAGE_SIZES.forEach((n) => sizeBox.add(new Option(String(n), String(n))));
+    label.appendChild(sizeBox);
+    bar.append(info, nav, label);
+    wrap.after(bar);
+    let size = Number(saved.get("invoagent.rows"));
+    if (!PAGE_SIZES.includes(size)) size = 20;
+    sizeBox.value = String(size);
+    let page = 1;
+
+    const render = () => {
+      const all = [...body.rows];
+      const rows = all.filter((r) => r.dataset.out !== "1");
+      const pages = Math.max(1, Math.ceil(rows.length / size));
+      page = Math.min(Math.max(page, 1), pages);
+      const first = (page - 1) * size;
+      const shown = new Set(rows.slice(first, first + size));
+      let n = 0;
+      all.forEach((r) => {
+        r.hidden = !shown.has(r);
+        if (!r.hidden) r.classList.toggle("alt", n++ % 2 === 1);
+      });
+      info.textContent = rows.length ? `${first + 1}–${Math.min(first + size, rows.length)} of ${rows.length}` : "No rows";
+      where.textContent = `Page ${page} of ${pages}`;
+      prev.disabled = page === 1;
+      next.disabled = page === pages;
+      bar.hidden = wrap.hidden || rows.length <= PAGE_SIZES[0];  // the Data sheet tab not shown: no pager
+    };
+    const go = (to) => {
+      page = to;
+      render();
+      wrap.scrollTop = 0;
+      if (wrap.getBoundingClientRect().top < 0) wrap.scrollIntoView({ block: "start" });
+    };
+    prev.addEventListener("click", () => go(page - 1));
+    next.addEventListener("click", () => go(page + 1));
+    sizeBox.addEventListener("change", () => {
+      size = Number(sizeBox.value);
+      saved.set("invoagent.rows", String(size));
+      go(1);
+    });
+    pagers.set(table, { refresh(fromStart) { if (fromStart) page = 1; render(); } });
+    render();
+  });
+
+  // Wide tables: the main columns; "Show all columns" adds the others (remembered in this browser).
+  document.querySelectorAll("input[data-all-columns]").forEach((box) => {
+    const tables = document.querySelectorAll(box.dataset.allColumns);
+    const key = "invoagent.allcolumns." + box.dataset.key;
+    box.checked = saved.get(key) === "1";
+    const apply = () => tables.forEach((t) => t.classList.toggle("main-only", !box.checked));
+    box.addEventListener("change", () => { saved.set(key, box.checked ? "1" : "0"); apply(); });
+    box.closest("label").hidden = false;
+    apply();
+  });
+
+  // A wide table also gets a scroll bar above it: it can be scrolled sideways without going down to its end.
+  document.querySelectorAll(".sheet-wrap, .table-wrap").forEach((wrap) => {
+    const top = document.createElement("div");
+    top.className = "top-scroll";
+    top.setAttribute("aria-hidden", "true");
+    const inner = document.createElement("div");
+    top.appendChild(inner);
+    wrap.before(top);
+    const fit = () => {
+      inner.style.width = wrap.scrollWidth + "px";
+      top.hidden = wrap.hidden || wrap.scrollWidth <= wrap.clientWidth + 1;
+    };
+    top.addEventListener("scroll", () => { if (wrap.scrollLeft !== top.scrollLeft) wrap.scrollLeft = top.scrollLeft; });
+    wrap.addEventListener("scroll", () => { if (top.scrollLeft !== wrap.scrollLeft) top.scrollLeft = wrap.scrollLeft; });
+    if (window.ResizeObserver) {
+      const watch = new ResizeObserver(fit);
+      watch.observe(wrap);
+      const table = wrap.querySelector("table");
+      if (table) watch.observe(table);
+    }
+    window.addEventListener("resize", fit);
+    fit();
+  });
+
+  // Side panel (.drawer): slides in from the right over the page; ×, Esc or a click beside it closes it.
+  const backdrop = document.createElement("div");
+  backdrop.className = "drawer-backdrop";
+  backdrop.hidden = true;
+  document.body.appendChild(backdrop);
+  let openDrawer = null, opener = null;
+  const closeDrawer = () => {
+    if (!openDrawer) return;
+    openDrawer.classList.remove("open");
+    backdrop.hidden = true;
+    openDrawer = null;
+    if (opener) opener.focus();
+  };
+  const showDrawer = (drawer, from) => {
+    if (openDrawer && openDrawer !== drawer) closeDrawer();
+    drawer.hidden = false;
+    void drawer.offsetWidth;  // start the slide from outside the window
+    drawer.classList.add("open");
+    backdrop.hidden = false;
+    openDrawer = drawer;
+    opener = from || null;
+    drawer.focus();
+  };
+  backdrop.addEventListener("click", closeDrawer);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeDrawer(); });
+  document.querySelectorAll(".drawer-close").forEach((btn) => { btn.hidden = false; btn.addEventListener("click", closeDrawer); });
+  document.querySelectorAll("[data-drawer]").forEach((btn) => {
+    const drawer = document.getElementById(btn.dataset.drawer);
+    if (!drawer) return;
+    btn.hidden = false;
+    btn.addEventListener("click", () => showDrawer(drawer, btn));
+    if (window.location.hash === "#" + drawer.id) showDrawer(drawer, btn);  // "Items" on the Data sheet without this script
+  });
+
+  // Data sheet: "3 items" in an invoice's row shows its line items in the side panel.
+  const sheetDrawer = document.getElementById("sheet-drawer");
+  if (sheetDrawer) {
+    const itemsTable = document.querySelector("#sheet-items table");
+    const itemCols = itemsTable ? [...itemsTable.querySelectorAll("thead th")].map((th) => th.dataset.col) : [];
+    const invoiceCols = [...document.querySelectorAll("#sheet-invoices thead th")].map((th) => th.dataset.col);
+    const SHOW = [["line_no", "#"], ["description", "Description"], ["quantity", "Qty"], ["unit_price", "Rate"], ["amount", "Amount"]];
+    document.querySelectorAll("a[data-items]").forEach((link) => {
+      link.addEventListener("click", (e) => {
+        if (e.ctrlKey || e.metaKey || e.shiftKey || !itemsTable) return;  // the invoice page in a new tab
+        e.preventDefault();
+        const id = link.dataset.items;
+        const row = link.closest("tr");
+        const text = (col) => { const i = invoiceCols.indexOf(col); return i < 0 ? "" : (row.children[i].dataset.v || ""); };
+        document.getElementById("sheet-drawer-title").textContent =
+          `Line items · invoice ${text("invoice_number") || "#" + id}`;
+        document.getElementById("sheet-drawer-sub").textContent =
+          [text("seller_name"), text("invoice_date"), text("total") && `total ${Number(text("total")).toLocaleString(undefined, { minimumFractionDigits: 2 })} ${text("currency")}`]
+            .filter(Boolean).join(" · ");
+        const table = document.createElement("table");
+        table.className = "items-table";
+        const head = table.createTHead().insertRow();
+        SHOW.forEach(([, title], i) => { const th = document.createElement("th"); th.textContent = title; if (i > 1) th.className = "num"; head.appendChild(th); });
+        const tbody = table.createTBody();
+        itemsTable.querySelectorAll(`tbody tr[data-invoice="${CSS.escape(id)}"]`).forEach((src) => {
+          const tr = tbody.insertRow();
+          SHOW.forEach(([col], i) => {
+            const from = src.children[itemCols.indexOf(col)];
+            const td = tr.insertCell();
+            td.innerHTML = from ? from.innerHTML : "";
+            if (i > 1) td.className = "num";
+          });
+        });
+        const body = document.getElementById("sheet-drawer-body");
+        body.textContent = "";
+        const open = document.createElement("a");
+        open.href = link.href.split("#")[0];
+        open.className = "btn secondary";
+        open.textContent = "Open the invoice";
+        const wrap = document.createElement("div");
+        wrap.className = "table-wrap";
+        wrap.appendChild(table);
+        body.append(wrap, open);
+        showDrawer(sheetDrawer, link);
+      });
+    });
+  }
+
   // Data sheet: sheet tabs, filter, sort by column, totals per currency.
   const sheetFilter = document.getElementById("sheet-filter");
   if (sheetFilter) {
@@ -71,7 +256,7 @@
       let shown = 0;
       table.querySelectorAll("tbody tr").forEach((tr) => {
         const visible = (!q || tr.textContent.toLowerCase().includes(q)) && (!onlyReview || tr.dataset.review === "1");
-        tr.hidden = !visible;
+        tr.dataset.out = visible ? "" : "1";  // the pager shows one page of the rows left
         if (!visible) return;
         shown += 1;
         const cur = tr.dataset.currency || "no currency";
@@ -84,13 +269,16 @@
       const parts = Object.entries(sums)
         .map(([cur, s]) => `${cur}: ` + moneyCols.filter((c) => c in s).map((c) => `${c} ${money(s[c])}`).join(", "))
         .filter((p) => p.includes(" "));
-      summary.textContent = `${shown} rows shown` + (parts.length ? `  ·  Totals by currency → ${parts.join("  |  ")}` : "");
+      summary.textContent = `${shown} row${shown === 1 ? "" : "s"}` + (parts.length ? `  ·  Totals by currency → ${parts.join("  |  ")}` : "");
+      const pager = pagers.get(table);
+      if (pager) pager.refresh(true);
     };
 
     tabs.forEach((tab) => tab.addEventListener("click", () => {
       tabs.forEach((t) => t.classList.toggle("active", t === tab));
       document.querySelectorAll(".sheet-wrap").forEach((w) => { w.hidden = w.id !== tab.dataset.sheet; });
       active = document.getElementById(tab.dataset.sheet);
+      pagers.forEach((pager) => pager.refresh());
       update();
     }));
 
@@ -112,6 +300,8 @@
             return asc ? cmp : -cmp;
           });
           rows.forEach((r) => body.appendChild(r));
+          const pager = pagers.get(table);
+          if (pager) pager.refresh(true);
         });
       });
     });

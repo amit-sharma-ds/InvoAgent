@@ -9,31 +9,44 @@
 {%- if v is number %}{{ "{:,.2f}".format(v) }}{% else %}{{ v }}{% endif -%}
 {%- endmacro %}
 
-{% macro row(label, f, amount=False) -%}
-<tr>
+{# where a value was read and how sure the app is: shown when the pointer rests on it #}
+{% macro read_from(f) -%}
+{{ (f.confidence * 100) | round | int }}% sure{% if f.source_label %} · read from "{{ f.source_label }}"{% endif %}{% if f.page %} · page {{ f.page }}{% endif %}
+{%- endmacro %}
+
+{# a value the app is not sure of gets a small "check" mark #}
+{% macro sure(f) -%}
+{%- if f.confidence < 0.8 %} <span class="badge check {{ 'mid' if f.confidence >= 0.5 else 'low' }}" title="{{ read_from(f) }}">check</span>{% endif -%}
+{%- endmacro %}
+
+{% macro row(label, f, amount=False, optional=False, strong=False) -%}
+<tr{% if strong %} class="total-row"{% endif %}>
   <th>{{ label }}</th>
   {% if f and f.value is not none %}
-    <td>{% if amount %}{{ money(f.value) }}{% else %}{{ f.value }}{% endif %}</td>
-    <td>{{ badge(f.confidence) }}</td>
-    <td class="muted small">{{ f.source_label }}{% if f.page %} · page {{ f.page }}{% endif %}</td>
+    <td title="{{ read_from(f) }}">{% if amount %}{{ money(f.value) }}{% else %}{{ f.value }}{% endif %}{{ sure(f) }}</td>
+  {% elif optional %}
+    <td class="none">—</td>
   {% else %}
-    <td class="missing" colspan="3">not found</td>
+    <td class="missing">not found</td>
   {% endif %}
 </tr>
 {%- endmacro %}
 
 {% macro party(title, p) -%}
 <div class="card party">
-  <h3>{{ title }}</h3>
+  <div class="party-head">
+    <h2>{{ title }}</h2>
+    {% if p %}{{ sure(p) }}{% endif %}
+  </div>
   {% if p %}
-    <p class="name">{{ p.value.name }}</p>
-    {% if p.value.address %}<p class="addr">{{ p.value.address }}</p>{% endif %}
-    <dl>
-      {% if p.value.tax_id %}<dt>Tax ID</dt><dd>{{ p.value.tax_id }}</dd>{% endif %}
-      {% if p.value.email %}<dt>Email</dt><dd>{{ p.value.email }}</dd>{% endif %}
-      {% if p.value.phone %}<dt>Phone</dt><dd>{{ p.value.phone }}</dd>{% endif %}
-    </dl>
-    <p class="muted small">Matched label: "{{ p.source_label }}" · confidence {{ badge(p.confidence) }}</p>
+    {% set v = p.value %}
+    <table class="kv" title="{{ read_from(p) }}">
+      <tr><th>Name</th><td class="party-name">{{ v.name or '—' }}</td></tr>
+      <tr><th>GSTIN / Tax ID</th><td>{% if v.tax_id %}{{ v.tax_id }}{% else %}<span class="none">—</span>{% endif %}</td></tr>
+      <tr><th>Address</th><td>{% if v.address %}{{ v.address }}{% else %}<span class="none">—</span>{% endif %}</td></tr>
+      {% if v.phone %}<tr><th>Phone</th><td>{{ v.phone }}</td></tr>{% endif %}
+      {% if v.email %}<tr><th>Email</th><td>{{ v.email }}</td></tr>{% endif %}
+    </table>
   {% else %}
     <p class="missing">not found</p>
   {% endif %}
@@ -46,20 +59,22 @@
   <div class="result-head">
     <div>
       <h1>{{ result.source_file }}</h1>
-      <p class="muted small">{{ result.pages }} page(s) · {{ result.extraction.method }} text ·
-        label matching: {{ result.extraction.label_matcher }}</p>
+      <p class="muted small">{{ result.pages }} page{{ 's' if result.pages != 1 }}</p>
     </div>
     <div class="overall">Overall confidence {{ badge(result.overall_confidence) }}</div>
   </div>
 
   {% if result.warnings %}
-    <ul class="warnings">{% for w in result.warnings %}<li>{{ w }}</li>{% endfor %}</ul>
+    {% set n = result.warnings | length %}
+    <details class="notes">
+      <summary>{{ n }} thing{{ 's' if n != 1 }} to check before you approve</summary>
+      <ul>{% for w in result.warnings %}<li>{{ w | short_note }}</li>{% endfor %}</ul>
+    </details>
   {% endif %}
 
   {% if invoice %}
     <p class="small">Saved as invoice #{{ invoice.id }} ·
-      {% if invoice.needs_review %}<span class="badge low">needs review</span>{% else %}<span class="badge good">checks passed</span>{% endif %}
-      · processed in {{ invoice.processing_ms }} ms</p>
+      {% if invoice.needs_review %}<span class="badge low">needs review</span>{% else %}<span class="badge good">checks passed</span>{% endif %}</p>
     <form class="company-form" method="post" action="{{ url_for('set_invoice_company', invoice_id=invoice.id) }}">
       <label>Company (folder)
         {{ company_input(invoice.company, id='invoice-company', placeholder='No company') }}
@@ -146,8 +161,8 @@
     <table class="kv">
       {{ row("Invoice number", result.fields.invoice_number) }}
       {{ row("Invoice date", result.fields.invoice_date) }}
-      {{ row("Due date", result.fields.due_date) }}
-      {{ row("PO number", result.fields.po_number) }}
+      {{ row("Due date", result.fields.due_date, optional=True) }}
+      {{ row("PO number", result.fields.po_number, optional=True) }}
       {{ row("Currency", result.fields.currency) }}
     </table>
   </div>
@@ -156,38 +171,61 @@
     <table class="kv">
       {{ row("Subtotal", result.fields.subtotal, true) }}
       {{ row("Tax", result.fields.tax, true) }}
-      {{ row("Discount", result.fields.discount, true) }}
-      {{ row("Shipping / freight", result.fields.shipping, true) }}
-      {{ row("Total", result.fields.total, true) }}
+      {{ row("Discount", result.fields.discount, true, optional=True) }}
+      {{ row("Shipping / freight", result.fields.shipping, true, optional=True) }}
+      {{ row("Total", result.fields.total, true, strong=True) }}
     </table>
   </div>
 </section>
 
 <section class="grid-2">
-  {{ party("Seller / Vendor", result.fields.seller) }}
-  {{ party("Buyer / Customer", result.fields.buyer) }}
+  {{ party("Seller", result.fields.seller) }}
+  {{ party("Buyer", result.fields.buyer) }}
 </section>
 
+{% set items = result.line_items or [] %}
 <section class="card">
-  <h2>Line items</h2>
-  {% if result.line_items %}
-    <div class="table-wrap">
-      <table>
-        <thead><tr><th>Description</th><th>Qty</th><th>Rate</th><th>Amount</th></tr></thead>
-        <tbody>
-          {% for it in result.line_items %}
-          <tr>
-            <td>{{ it.description }}</td>
-            <td>{{ it.quantity if it.quantity is not none else "" }}</td>
-            <td>{{ money(it.unit_price) if it.unit_price is not none else "" }}</td>
-            <td>{{ money(it.amount) }}</td>
-          </tr>
-          {% endfor %}
-        </tbody>
-      </table>
+  <div class="result-head">
+    <div>
+      <h2>Line items</h2>
+      {% if items %}
+        {% set items_sum = items | map(attribute='amount') | select('number') | sum %}
+        <p class="muted small">{{ items | length }} item{{ 's' if items | length != 1 }}{% if items_sum %} · amounts add up to {{ money(items_sum) }}{% endif %}</p>
+      {% else %}
+        <p class="muted small">No line-item table was detected.</p>
+      {% endif %}
     </div>
-  {% else %}
-    <p class="muted">No line-item table was detected.</p>
+    {% if items %}<button type="button" class="btn secondary" data-drawer="line-items" hidden>Show line items ({{ items | length }})</button>{% endif %}
+  </div>
+  {% if items %}
+  <aside class="drawer" id="line-items" tabindex="-1" aria-labelledby="line-items-title">
+    <div class="drawer-head">
+      <div>
+        <h2 id="line-items-title">Line items · {{ items | length }}</h2>
+        <p class="muted small">{{ result.fields.invoice_number.value if result.fields.invoice_number else result.source_file }}{% if result.fields.seller %} · {{ result.fields.seller.value.name }}{% endif %}</p>
+      </div>
+      <button type="button" class="drawer-close" aria-label="Close" hidden>&times;</button>
+    </div>
+    <div class="drawer-body">
+      <div class="table-wrap">
+        <table class="items-table">
+          <thead><tr><th>#</th><th>Description</th><th class="num">Qty</th><th class="num">Rate</th><th class="num">Amount</th></tr></thead>
+          <tbody>
+            {% for it in items %}
+            <tr>
+              <td class="muted">{{ loop.index }}</td>
+              <td>{{ it.description }}</td>
+              <td class="num">{% if it.quantity is number and it.quantity == it.quantity | int %}{{ it.quantity | int }}{% elif it.quantity is not none %}{{ it.quantity }}{% endif %}</td>
+              <td class="num">{{ money(it.unit_price) if it.unit_price is not none else "" }}</td>
+              <td class="num">{{ money(it.amount) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+          {% if items_sum %}<tfoot><tr><td></td><td>Total of the items</td><td></td><td></td><td class="num">{{ money(items_sum) }}</td></tr></tfoot>{% endif %}
+        </table>
+      </div>
+    </div>
+  </aside>
   {% endif %}
 </section>
 
@@ -205,7 +243,9 @@
 </section>
 
 <details class="card">
-  <summary>Raw text the parser read</summary>
+  <summary>Technical details and the raw text the parser read</summary>
+  <p class="muted small">{{ result.extraction.method }} text · label matching: {{ result.extraction.label_matcher }}
+    {%- if invoice and invoice.processing_ms %} · processed in {{ '%.1f' | format(invoice.processing_ms / 1000) }} s{% endif %}</p>
   <pre>{{ result.raw_text }}</pre>
 </details>
 {% endblock %}
