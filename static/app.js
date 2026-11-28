@@ -26,13 +26,14 @@
     tr.addEventListener("keydown", (e) => { if (e.key === "Enter") open(false); });
   });
 
-  // Invoices list: select rows, then "Delete selected".
+  // Invoices list: select rows, then "Delete selected". Move / Set project / Delete show once a row is picked.
   const pickAll = document.getElementById("pick-all");
   const bulkBtn = document.getElementById("bulk-delete-btn");
   if (bulkBtn) {
     const picks = () => [...document.querySelectorAll('input[name="ids"][form="bulk-delete"]')];
     const refresh = () => {
       const n = picks().filter((c) => c.checked).length;
+      bulkBtn.form.classList.toggle("picked", n > 0);
       bulkBtn.disabled = n === 0;
       bulkBtn.textContent = n ? `Delete selected (${n})` : "Delete selected";
     };
@@ -40,6 +41,15 @@
     if (pickAll) pickAll.addEventListener("change", () => { picks().forEach((c) => { c.checked = pickAll.checked; }); refresh(); });
     refresh();
   }
+
+  // Menus (details.menu): close after a choice, on a click elsewhere and on Escape.
+  const closeMenus = (except) => document.querySelectorAll("details.menu[open]").forEach((m) => { if (m !== except) m.open = false; });
+  document.addEventListener("click", (e) => {
+    const menu = e.target.closest("details.menu");
+    closeMenus(menu);
+    if (menu && e.target.closest(".menu-list a")) menu.open = false;
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenus(null); });
 
   // Show progress while the (OCR) work runs.
   document.querySelectorAll("form").forEach((form) => {
@@ -57,9 +67,17 @@
     set(key, value) { try { localStorage.setItem(key, value); } catch (e) { /* private window */ } },
   };
 
-  // Long tables (data-pages): one page of rows at a time, "1–20 of 57", Previous / Next and Rows per page
-  // below the table. Rows a filter leaves out have data-out="1".
+  // Long tables (data-pages): one page of rows at a time, "1–20 of 57", Previous, page numbers 1 2 3 …, Next
+  // and Rows per page below the table. Rows a filter leaves out have data-out="1".
   const PAGE_SIZES = [10, 20, 50, 100];
+  const pageNumbers = (page, pages) => {  // the first, the last and two either side of this page; null: a gap
+    const want = new Set([1, pages]);
+    for (let n = page - 2; n <= page + 2; n++) if (n >= 1 && n <= pages) want.add(n);
+    const list = [...want].sort((a, b) => a - b);
+    const out = [];
+    list.forEach((n, i) => { if (i && n > list[i - 1] + 1) out.push(null); out.push(n); });
+    return out;
+  };
   const pagers = new Map();
   document.querySelectorAll("table[data-pages]").forEach((table) => {
     const body = table.tBodies[0];
@@ -70,10 +88,10 @@
     const info = make("span", "muted small");
     const nav = make("span", "pager-nav");
     const prev = make("button", "btn secondary", "← Previous");
-    const where = make("span", "small");
+    const numbers = make("span", "pager-pages");
     const next = make("button", "btn secondary", "Next →");
     prev.type = next.type = "button";
-    nav.append(prev, where, next);
+    nav.append(prev, numbers, next);
     const label = make("label", "small muted", "Rows per page ");
     const sizeBox = document.createElement("select");
     PAGE_SIZES.forEach((n) => sizeBox.add(new Option(String(n), String(n))));
@@ -98,7 +116,15 @@
         if (!r.hidden) r.classList.toggle("alt", n++ % 2 === 1);
       });
       info.textContent = rows.length ? `${first + 1}–${Math.min(first + size, rows.length)} of ${rows.length}` : "No rows";
-      where.textContent = `Page ${page} of ${pages}`;
+      numbers.replaceChildren(...pageNumbers(page, pages).map((n) => {
+        if (n === null) return make("span", "pager-gap", "…");
+        const button = make("button", n === page ? "btn page-num" : "btn secondary page-num", String(n));
+        button.type = "button";
+        button.setAttribute("aria-label", `Page ${n}`);
+        if (n === page) button.setAttribute("aria-current", "page");
+        else button.addEventListener("click", () => go(n));
+        return button;
+      }));
       prev.disabled = page === 1;
       next.disabled = page === pages;
       bar.hidden = wrap.hidden || rows.length <= PAGE_SIZES[0];  // the Data sheet tab not shown: no pager

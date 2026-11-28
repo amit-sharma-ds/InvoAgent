@@ -15,7 +15,7 @@
         {% for v in vendors %}
           <tr data-href="{{ url_for('invoices', q=v.gstin or v.name) }}">
             <td><a href="{{ url_for('invoices', q=v.gstin or v.name) }}">{{ v.name }}</a></td>
-            <td>{% if v.gstin %}{{ v.gstin }}{% else %}<span class="null">null</span>{% endif %}</td>
+            <td>{% if v.gstin %}{{ v.gstin }}{% else %}<span class="null" title="Not found">–</span>{% endif %}</td>
             <td>{{ v.currency or '' }}</td>
             <td class="num">{{ v.invoices }}</td>
             <td class="num">{{ "{:,.2f}".format(v.total or 0) }}</td>

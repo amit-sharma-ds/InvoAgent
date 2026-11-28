@@ -1,11 +1,21 @@
-{# Pages of a list read from the server: "1–20 of 57", Previous / Next, Rows per page. The filters stay. #}
+{# Pages of a list read from the server: "1–20 of 57", Previous, page numbers 1 2 3 … , Next, Rows per page.
+   The filters stay. Many pages: the first, the last and two either side of this one. #}
 {% macro pager(endpoint, page, pages, total, per, sizes) -%}
+{% set numbers = ([1, pages] + range(page - 2, page + 3) | list) | select('ge', 1) | select('le', pages) | unique | sort %}
+{% set seen = namespace(last=0) %}
 <div class="pager">
   <span class="muted small">{% if total %}{{ (page - 1) * per + 1 }}–{{ [page * per, total] | min }} of {{ total }}{% else %}No rows{% endif %}</span>
   <span class="pager-nav">
     {% if page > 1 %}<a class="btn secondary" href="{{ url_with(endpoint, page=page - 1) }}">&larr; Previous</a>
     {% else %}<span class="btn secondary off" aria-disabled="true">&larr; Previous</span>{% endif %}
-    <span class="small">Page {{ page }} of {{ pages }}</span>
+    <span class="pager-pages">
+      {%- for n in numbers %}
+        {%- if n > seen.last + 1 %}<span class="pager-gap">…</span>{% endif %}
+        {%- if n == page %}<span class="btn page-num" aria-current="page">{{ n }}</span>
+        {%- else %}<a class="btn secondary page-num" href="{{ url_with(endpoint, page=n) }}" aria-label="Page {{ n }}">{{ n }}</a>{% endif %}
+        {%- set seen.last = n %}
+      {%- endfor %}
+    </span>
     {% if page < pages %}<a class="btn secondary" href="{{ url_with(endpoint, page=page + 1) }}">Next &rarr;</a>
     {% else %}<span class="btn secondary off" aria-disabled="true">Next &rarr;</span>{% endif %}
   </span>

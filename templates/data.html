@@ -4,7 +4,7 @@
 <td class="{% if v is number and c not in yes_no_columns %}num{% endif %}{% if extra %} extra{% endif %}" data-v="{{ '' if v is none else v }}"
     {%- if v is string and v | length > 30 %} title="{{ v }}"{% endif %}>
   {%- if invoice_link and v is not none -%}<a href="{{ url_for('invoice_detail', invoice_id=v) }}">{{ v }}</a>
-  {%- elif v is none -%}<span class="null">null</span>
+  {%- elif v is none -%}<span class="null" title="Not found">–</span>
   {%- elif c in money_columns -%}{{ "{:,.2f}".format(v) }}
   {%- elif c == 'quantity' and v is number and v == v | int -%}{{ v | int }}
   {%- elif c in yes_no_columns -%}{{ 'yes' if v else 'no' }}
@@ -31,11 +31,14 @@
           <a href="{{ url_for('data_sheet') }}">All invoices</a></p>
       {% endif %}
     </div>
-    <div class="actions">
-      <a class="btn" href="{{ url_with('export_invoices_xlsx') }}">Download Excel (both sheets)</a>
-      <a class="btn secondary" href="{{ url_with('export_invoices_csv') }}">Download invoices CSV</a>
-      <a class="btn secondary" href="{{ url_with('export_line_items_csv') }}">Download line items CSV</a>
-    </div>
+    <details class="menu">
+      <summary class="btn">Download</summary>
+      <div class="menu-list">
+        <a href="{{ url_with('export_invoices_xlsx') }}">Invoices + line items <span class="muted small">Excel</span></a>
+        <a href="{{ url_with('export_invoices_csv') }}">Invoices <span class="muted small">CSV</span></a>
+        <a href="{{ url_with('export_line_items_csv') }}">Line items <span class="muted small">CSV</span></a>
+      </div>
+    </details>
   </div>
   <div class="sheet-toolbar">
     <div class="sheet-tabs">

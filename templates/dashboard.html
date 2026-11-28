@@ -184,7 +184,7 @@
   </ul>
   <details>
     <summary>Show as a table</summary>
-    <div class="table-wrap"><table class="kv">
+    <div class="table-wrap"><table class="kv" data-pages>
       <thead><tr><th>Company</th><th class="num">Invoices</th><th class="num">Purchases</th><th class="num">Sales</th><th class="num">Net</th></tr></thead>
       <tbody>
         {% for c in d.company_rows %}<tr><td>{{ c.name or 'No company' }}</td><td class="num">{{ c.invoices }}</td>
@@ -221,7 +221,7 @@
       </li>
     {% endfor %}
   </ul>
-  <div class="table-wrap"><table class="kv">
+  <div class="table-wrap"><table class="kv" data-pages>
     <thead><tr><th>Project</th><th class="num">Bills</th><th class="num">Sales</th><th class="num">Purchases</th>
       <th class="num">Margin</th><th class="num">Margin&nbsp;%</th></tr></thead>
     <tbody>

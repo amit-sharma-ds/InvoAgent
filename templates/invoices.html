@@ -10,8 +10,7 @@
         {{ stats.needs_review }} need review · {{ stats.queued + stats.processing }} in queue</p>
     </div>
     <div class="actions">
-      <a class="btn secondary" href="{{ url_with('data_sheet') }}">View Excel / CSV</a>
-      <a class="btn secondary" href="{{ url_with('data_sheet', sheet='items') }}">View line items</a>
+      <a class="btn secondary" href="{{ url_with('data_sheet') }}">Data sheet</a>
     </div>
   </div>
 
@@ -81,7 +80,7 @@
               {% set v = r[c] %}
               <td class="{% if c in money_columns %}num{% endif %}{% if c not in main_columns %} extra{% endif %}">
                 {%- if c == 'id' -%}<a href="{{ url_for('invoice_detail', invoice_id=v) }}">{{ v }}</a>
-                {%- elif v is none -%}<span class="null">null</span>
+                {%- elif v is none -%}<span class="null" title="Not found">–</span>
                 {%- elif c in money_columns -%}{{ "{:,.2f}".format(v) }}
                 {%- elif c == 'overall_confidence' -%}{{ (v * 100) | round | int }}%
                 {%- elif c == 'needs_review' -%}{{ 'yes' if v else 'no' }}

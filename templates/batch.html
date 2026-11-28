@@ -16,7 +16,7 @@
   </p>
   {% if batch.complete %}
     <div class="actions">
-      <a class="btn" href="{{ url_for('data_sheet', batch=batch.id) }}">View this batch (Excel)</a>
+      <a class="btn" href="{{ url_for('data_sheet', batch=batch.id) }}">Data sheet</a>
       <a class="btn secondary" href="{{ url_for('invoices', batch=batch.id) }}">Open in invoice table</a>
     </div>
   {% else %}
@@ -35,9 +35,9 @@
             <td><a href="{{ url_for('invoice_detail', invoice_id=r.id) }}">{{ r.id }}</a></td>
             <td>{{ r.file_name }}</td>
             <td><span class="status {{ r.status }}">{{ r.status }}</span></td>
-            <td>{% if r.invoice_number is none %}<span class="null">null</span>{% else %}{{ r.invoice_number }}{% endif %}</td>
-            <td>{% if r.seller_name is none %}<span class="null">null</span>{% else %}{{ r.seller_name }}{% endif %}</td>
-            <td class="num">{% if r.total is none %}<span class="null">null</span>{% else %}{{ "{:,.2f}".format(r.total) }}{% endif %}</td>
+            <td>{% if r.invoice_number is none %}<span class="null" title="Not found">–</span>{% else %}{{ r.invoice_number }}{% endif %}</td>
+            <td>{% if r.seller_name is none %}<span class="null" title="Not found">–</span>{% else %}{{ r.seller_name }}{% endif %}</td>
+            <td class="num">{% if r.total is none %}<span class="null" title="Not found">–</span>{% else %}{{ "{:,.2f}".format(r.total) }}{% endif %}</td>
             <td>{% if r.status == 'done' %}{{ 'yes' if r.needs_review else 'no' }}{% endif %}</td>
           </tr>
         {% endfor %}

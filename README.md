@@ -61,7 +61,7 @@ Every page has a **left sidebar** with one tab per job, so new features always g
 |---|---|
 | **Dashboard** (start page) | Counts of all invoices (need review, approved, rejected, possible duplicates, failed); total value, purchases (bills the company pays), sales (bills it raises), net, GST payable / to claim and companies at the top; purchases and sales by month, company-wise, project-wise, top suppliers and customers; for all or one company, all or one project, per currency, for the last 12 months, this / last financial year (Apr-Mar) or all years. Hover a bar for the numbers; "Show as a table" lists them; the recent invoices below |
 | **Projects** (on the Dashboard) | A bill can be put in a project: on the Add invoices page (for the whole upload, offered again next time), on the invoice page, or for the bills selected in the Invoices list (**Set project**). One project can run in several of your companies. The Dashboard's **Project-wise** part shows each project's sales, purchases and **margin, all without GST** (GST is passed on or claimed back); a bill whose GST was not found counts with its whole total and the table says so. Choose a project at the top to see only its bills. With all companies shown, a bill from one of your companies to another is left out (the money stays inside the group; the page says how many), so a project's margin is the client's payment minus the outside suppliers' bills; each company's own books (one company chosen on the Dashboard) still count it as the seller's sale and the buyer's purchase |
-| **Companies** | **Your companies** (typed once, with their GSTINs if wanted): a bill where one of them is the seller is a sale, where it is the buyer a purchase (a bill from one of them to another is the seller's sale), and every invoice goes into the folder of the company it names. One folder per company: invoices, purchases, sales, the company's own GSTIN (typed, or found from its invoices), and Open / Dashboard / View Excel / Files (ZIP) |
+| **Companies** | **Your companies** (typed once, with their GSTINs if wanted): a bill where one of them is the seller is a sale, where it is the buyer a purchase (a bill from one of them to another is the seller's sale), and every invoice goes into the folder of the company it names. One folder per company: invoices, purchases, sales, the company's own GSTIN (typed, or found from its invoices), and Open / Dashboard / Data sheet / Files (ZIP) |
 | **Add invoices** | One place for everything: pick the company, then drop or choose PDFs, photos, a ZIP or a whole folder, take photos with the phone camera, or paste a copied picture (Ctrl+V, read straight away). The files are listed (thumbnail, size, remove) before they are sent with a progress bar; one invoice opens at once, more go to a background batch |
 | **Invoices** | Search and filter all invoices (company, project, status, review status, needs review), move the selected ones to a company or a project, Excel / CSV export |
 | **Review queue** | Only the invoices a person must check: low confidence, failed checks, missing fields or a possible duplicate |
@@ -293,7 +293,7 @@ What was made faster:
 ## The invoice table and exports
 
 Every invoice gets the **same columns**. When a field is not on an invoice, its value is `NULL`. The table shows
-it as a grey *null*; in Excel and CSV it is an empty cell, so sums and filters work. Columns:
+it as a grey dash (–); in Excel and CSV it is an empty cell, so sums and filters work. Columns:
 
 `invoice_number, invoice_date, due_date, po_number, currency, seller_name, seller_address, seller_tax_id,
 seller_email, seller_phone, buyer_name, buyer_address, buyer_tax_id, buyer_email, buyer_phone, subtotal, tax,
@@ -306,8 +306,8 @@ description, quantity, unit_price, amount`.
   only"; batch. The `company` and `project` columns are in the table and the exports.
 - **Needs review:** an invoice is flagged when overall confidence is below 0.8, a required field
   (number, date, seller, total) is missing, or the totals or line items do not add up. Flagged rows are highlighted.
-- **Exports, viewed first:** *View Excel / CSV* (Invoices page, a company folder, a finished batch) opens the
-  Data sheet with the same filters; its buttons download Excel (two sheets, real date cells), *Invoices CSV*
+- **Exports, viewed first:** *Data sheet* (Invoices page, a company folder, a finished batch) opens the
+  Data sheet with the same filters; its *Download* menu gives Excel (two sheets, real date cells), *Invoices CSV*
   and *Line items CSV* (UTF-8, opens correctly in Excel).
 - **Each invoice** has its own page with all fields, confidence, the source label each value came from,
   *View JSON* (shown on the page, with *Download JSON*), the original file, and a *Re-process* button.

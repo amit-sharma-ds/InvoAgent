@@ -173,14 +173,18 @@ table.data th { white-space: nowrap; text-transform: capitalize; color: var(--mu
 table.data td { white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
 table.data td.num { text-align: right; font-variant-numeric: tabular-nums; }
 table.data tr.review td { background: #fffaeb; }
-.null { color: #98a2b3; font-style: italic; }
+.null { color: #98a2b3; }
 .status { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; background: #f2f4f7; }
 .status.done { background: #ecfdf3; color: var(--good); }
 .status.failed { background: #fef3f2; color: var(--low); }
 .status.processing, .status.queued { background: #eef2ff; color: var(--brand); }
 .pager { display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between; margin-top: 12px; }
 .pager[hidden] { display: none; }
-.pager-nav { display: flex; gap: 10px; align-items: center; }
+.pager-nav { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.pager-pages { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.pager .page-num { min-width: 34px; padding: 6px 8px; text-align: center; }
+.pager .page-num[aria-current] { cursor: default; }
+.pager-gap { padding: 0 2px; color: var(--muted); }
 .pager .btn { padding: 6px 12px; font-size: 13px; }
 .pager .btn:disabled, .pager .btn.off { opacity: .45; cursor: default; }
 .pager select { padding: 5px 6px; border: 1px solid var(--border); border-radius: 7px; font: inherit; background: #fff; margin-left: 4px; }
@@ -276,6 +280,15 @@ table.kv tr:last-child th, table.kv tr:last-child td { border-bottom: 0; }
 .badge.check { cursor: help; }
 
 details summary { cursor: pointer; font-weight: 600; }
+/* A button that opens a short list (Data sheet: Download). */
+.menu { position: relative; }
+.menu > summary { list-style: none; }
+.menu > summary::-webkit-details-marker { display: none; }
+.menu > summary::after { content: "▾"; margin-left: 8px; font-size: 12px; }
+.menu-list { position: absolute; right: 0; top: calc(100% + 6px); z-index: 25; min-width: 230px; display: flex; flex-direction: column;
+  padding: 6px; background: #fff; border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 8px 28px rgba(16, 24, 40, .15); }
+.menu-list a { display: flex; justify-content: space-between; gap: 16px; padding: 9px 10px; border-radius: 7px; color: var(--text); text-decoration: none; }
+.menu-list a:hover, .menu-list a:focus-visible { background: #f2f4f7; }
 
 /* clickable rows, back link, delete */
 tr[data-href] { cursor: pointer; }
@@ -404,6 +417,14 @@ a.kpi:hover { border-color: #c7d2fe; }
 .own-companies-form textarea { flex: 1 1 320px; min-width: 0; max-width: 560px; padding: 8px 10px; border: 1px solid var(--border);
   border-radius: 8px; font: inherit; color: var(--text); background: #fff; resize: vertical; }
 .bulk-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+/* Shown once a row is picked, as a bar at the bottom of the window: the table does not move. */
+html.js .bulk-actions:not(.picked) { display: none; }
+html.js .bulk-actions.picked {
+  position: fixed; z-index: 30; bottom: 16px; left: 50%; transform: translateX(-50%);
+  width: max-content; max-width: calc(100vw - 32px); justify-content: center;
+  padding: 10px 12px; background: #fff; border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 8px 28px rgba(16, 24, 40, .18);
+}
 .bulk-actions input { width: 200px; }
 .dash-pair { display: grid; gap: 16px; grid-template-columns: 1fr; }
 .dash-pair > * { min-width: 0; margin: 0; }

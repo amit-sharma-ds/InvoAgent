@@ -131,7 +131,9 @@ def test_data_sheet_shows_all_invoices_and_line_items(client):
     html = page.data.decode("utf-8")
     assert "Data sheet" in html and "INV-2024-0042" in html
     assert 'data-sheet="sheet-items"' in html and "Laptop Stand" in html  # line-item sheet
-    assert '<span class="null">null</span>' in html  # missing fields are shown as null
+    assert html.count('<details class="menu">') == 1 and "/export/invoices.xlsx" in html  # one Download menu
+    assert "/export/invoices.csv" in html and "/export/line_items.csv" in html
+    assert '<span class="null" title="Not found">–</span>' in html  # a missing field is shown as a dash
     assert "seller_tax_id" in html and "buyer_tax_id" in html  # every export column is there
 
 
@@ -148,7 +150,8 @@ def test_long_lists_come_in_pages(client):
         assert '<option value="20" selected>' in page and 'name="per"' in page
         pages = -(-total // 10)
         last = client.get("/invoices?per=10&page=999&q=").data.decode("utf-8")
-        assert f"Page {pages} of {pages}" in last and '<option value="10" selected>' in last
+        assert f'<span class="btn page-num" aria-current="page">{pages}</span>' in last  # numbered pages 1 2 3
+        assert 'aria-label="Page 1">1</a>' in last and '<option value="10" selected>' in last
         assert last.count('name="ids"') == total - 10 * (pages - 1)
         assert '<input type="hidden" name="q" value="">' in last  # the filters stay when Rows per page changes
         assert '<option value="20" selected>' in client.get("/invoices?per=7").data.decode("utf-8")  # not offered
